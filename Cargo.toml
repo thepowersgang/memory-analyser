@@ -1,0 +1,8 @@
+[package]
+name = "memory_analyser_linux"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+elf = "0.8.0"
+gimli = "0.33.0"
