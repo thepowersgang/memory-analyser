@@ -61,7 +61,7 @@ impl DebugPool {
                     InType(String, TypeRef, Vec<CompositeField>),
                     InFunction(String, FunctionRecord),
                     // Should only exist underneath a `InFunction`
-                    FcnScope(PcRange),
+                    FcnScope(PcRanges),
                 }
                 impl ::std::fmt::Debug for State {
                     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -104,10 +104,10 @@ impl DebugPool {
                             match stack.pop().unwrap() {
                             State::InFunction(n, fr) => {
                                 println!("END fn {}", n);
-                                println!("{:?}", fr.variables);
                                 let was_main = n == "::main";
                                 self.functions.insert(n, fr);
                                 if was_main {
+                                    println!("main.hir_crate = {:?}", self.functions["::main"].variables["hir_crate"]);
                                     return
                                 }
                             } 
@@ -121,7 +121,7 @@ impl DebugPool {
                         if (v.depth as usize) > stack.len() {
                             continue ;
                         }
-                        fn get_pc_range(v: &gimli::DebuggingInformationEntry<::gimli::EndianSlice<::gimli::LittleEndian>>) -> PcRange {
+                        let get_pc_range = |v: &gimli::DebuggingInformationEntry<::gimli::EndianSlice<::gimli::LittleEndian>>| -> PcRanges {
                             fn unwrap_addr(v: &::gimli::Attribute<::gimli::EndianSlice<::gimli::LittleEndian>>) -> u64 {
                                 match v.value() {
                                 ::gimli::AttributeValue::Addr(a) => a,
@@ -132,14 +132,34 @@ impl DebugPool {
                             let at_lo = v.attr(::gimli::DW_AT_low_pc).map(|v| unwrap_addr(v));
                             let at_hi = v.attr(::gimli::DW_AT_high_pc).map(|v| unwrap_addr(v));
                             let ranges = v.attr(::gimli::DW_AT_ranges).map(|v| v.value());
-                            match (at_lo, at_hi, ranges)
-                            {
-                            (Some(lo), None, _) => PcRange { start: lo, end: lo },
-                            (Some(lo), Some(hi), _) => PcRange { start: lo, end: hi },
-                            (None, _, None) => PcRange { start: 0, end: 0 },
-                            (None, _, Some(r)) => PcRange { start: 0, end: 0 },
+                            PcRanges {
+                                ranges: match (at_lo, at_hi, ranges)
+                                {
+                                (Some(lo), None, _) => vec![PcRange { start: lo, end: lo }],
+                                (Some(lo), Some(hi), _) => vec![PcRange { start: lo, end: hi }],
+                                (None, _, None) => vec![],
+                                (None, _, Some(r)) => {
+                                    let r = match r {
+                                        gimli::AttributeValue::RangeListsRef(r) => debug_info.raw_ranges(&unit, gimli::RangeListsOffset(r.0)).unwrap(),
+                                        _ => todo!(),
+                                        };
+                                    let mut rv = Vec::new();
+                                    let mut base_addr = 0;
+                                    for v in r.map(|v| v.unwrap())
+                                    {
+                                        match v {
+                                        gimli::RawRngListEntry::BaseAddress { addr } => base_addr = addr,
+                                        gimli::RawRngListEntry::OffsetPair { begin, end } => rv.push(PcRange { start: base_addr + begin, end: base_addr + end }),
+                                        gimli::RawRngListEntry::StartEnd { begin, end } => rv.push(PcRange { start: begin, end }),
+                                        gimli::RawRngListEntry::StartLength { begin, length } => rv.push(PcRange { start: begin, end: begin + length }),
+                                        _ => todo!("{:?}", v),
+                                        }
+                                    }
+                                    rv
+                                },
+                                }
                             }
-                        }
+                        };
                         //println!("{} {:?} {:x?}", v.depth, stack, v);
                         match v.tag()
                         {
@@ -202,7 +222,7 @@ impl DebugPool {
                             _ => {},
                             }
                         },
-                        &State::InFunction(_, FunctionRecord { pc_range, .. }) | &State::FcnScope(pc_range) => {
+                        &State::InFunction(_, FunctionRecord { ref pc_range, .. }) | &State::FcnScope(ref pc_range) => {
                             match v.tag()
                             {
                             gimli::DW_TAG_lexical_block => {
@@ -266,14 +286,17 @@ impl DebugPool {
                                     };
                                 // Get the current function (look up the stack) and add this variable, along with its contained scope
                                 if let Some(name) = name {
-                                    stack.iter_mut()
-                                        .filter_map(|v| match v { State::InFunction(_, fr) => Some(fr), _ => None })
-                                        .next()
-                                        .unwrap()
-                                        .variables.entry(name.to_owned())
-                                        .or_insert(VariableRecord { ty: ty.unwrap(), ranges: Vec::new() })
-                                        .ranges
-                                        .push(VariableRange { pc_range, position: pos });
+                                    let pc_range = pc_range.clone();
+                                    if !pc_range.is_empty() {
+                                        stack.iter_mut()
+                                            .filter_map(|v| match v { State::InFunction(_, fr) => Some(fr), _ => None })
+                                            .next()
+                                            .unwrap()
+                                            .variables.entry(name.to_owned())
+                                            .or_insert(VariableRecord { ty: ty.unwrap(), ranges: Vec::new() })
+                                            .ranges
+                                            .push(VariableRange { pc_range, position: pos });
+                                    }
                                 }
                                 },
                             
@@ -317,15 +340,31 @@ impl DebugPool {
     }
 
     pub fn get_caller(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump) -> crate::CpuState {
-        todo!()
+        todo!("get_caller")
     }
 
     // Get the storage address of a variable
     pub fn get_variable(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump, name: &str) -> (u64, TypeRef) {
+        let pc = state.get_pc();
+        for (fcn_name, fcn_rec) in &self.functions {
+            if fcn_rec.pc_range.contains(pc) {
+                let var = &fcn_rec.variables[name];
+                for r in &var.ranges {
+                    if r.pc_range.contains(pc) {
+                        match &r.position {
+                        VariablePosition::OptimisedOut => todo!("Optimsed out variable"),
+                        VariablePosition::Fixed(_) => todo!(),
+                        VariablePosition::Expr(items) => todo!(),
+                        }
+                    }
+                }
+                todo!("Unable to find variable def in {} at PC {:#x}", fcn_name, pc);
+            }
+        }
         todo!()
     }
     pub fn get_type(&self, ty: &TypeRef) -> &Type {
-        todo!();
+        self.types[ty.0].as_ref().expect("Type not populated")
     }
 
     fn dwarf_type_ref(&mut self, unit_index: usize, ofs: ::gimli::UnitOffset) -> TypeRef {
@@ -338,14 +377,36 @@ impl DebugPool {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 struct PcRange {
     start: u64,
     end: u64,
 }
+impl PcRange {
+    fn contains(&self, pc: u64) -> bool {
+        self.start <= pc && pc < self.end
+    }
+}
+impl ::std::fmt::Debug for PcRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "0x{:x}--0x{:x}", self.start, self.end)
+    }
+}
+#[derive(Debug,Clone)]
+struct PcRanges {
+    ranges: Vec<PcRange>,
+}
+impl PcRanges {
+    fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+    fn contains(&self, pc: u64) -> bool {
+        self.ranges.iter().any(|v| v.contains(pc))
+    }
+}
 struct FunctionRecord {
     /// Range of PC values covered by this function
-    pc_range: PcRange,
+    pc_range: PcRanges,
     variables: ::std::collections::HashMap<String,VariableRecord>,
 }
 #[derive(Debug)]
@@ -355,7 +416,7 @@ struct VariableRecord {
 }
 #[derive(Debug)]
 struct VariableRange {
-    pc_range: PcRange,
+    pc_range: PcRanges,
     position: VariablePosition,
 }
 #[derive(Debug)]
@@ -385,7 +446,7 @@ pub struct CompositeType {
 impl CompositeType {
     /// Check if this is a named type with a given prefix (e.g. for finding `std::vector<`)
     pub fn is_name_prefix(&self, prefix: &str) -> bool {
-        false
+        self.name.starts_with(prefix)
     }
 
     pub fn iter_fields(&self) -> impl Iterator<Item=&CompositeField> {

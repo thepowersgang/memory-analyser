@@ -7,6 +7,7 @@ pub struct CoreDump {
     file_chunks: Vec<u64>,
 
     // TODO: thread state
+    threads: Vec<super::CpuState>,
 }
 struct ReferencedFile {
     base: u64,
@@ -43,7 +44,10 @@ impl CoreDump {
             ],
             memory_ranges: Vec::new(),
             chunk_size: 1<<20,
-            file_chunks: Vec::new()
+            file_chunks: Vec::new(),
+            threads: vec![
+                super::CpuState {}
+            ]
         }
     }
 
@@ -52,7 +56,7 @@ impl CoreDump {
     }
 
     pub fn get_thread(&self, index: usize) -> &crate::CpuState {
-        todo!("get_thread")
+        &self.threads[index]
     }
 
     pub fn read_bytes(&self, addr: u64, dst: &mut [u8]) {
@@ -73,5 +77,13 @@ impl CoreDump {
     }
 
     fn with_chunk(&self, index: usize, cb: impl FnOnce(&[u8])) {
+    }
+}
+
+impl CoreDump {
+    pub fn read_ptr(&self, addr: u64) -> u64 {
+        let mut v = [0; 8];
+        self.read_bytes(addr, &mut v);
+        u64::from_le_bytes(v)
     }
 }
