@@ -18,7 +18,7 @@ fn main() {
         match debug.add_file(&module_path, base)
         {
         Ok(()) => {},
-        Err(e) => panic!("Failed to load {:?}: {:?}", path, e),
+        Err(e) => panic!("Failed to load {:?}: {:?}", module_path, e),
         }
     }
 
@@ -32,7 +32,6 @@ fn main() {
 fn visit_type(debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64) {
     match ty {
     debug_info::Type::Struct(composite_type) => {
-        // TODO: Unions need extra handling
         for f in composite_type.iter_fields() {
             visit_type(debug, dump, &debug.get_type(&f.ty), addr + f.offset);
         }
