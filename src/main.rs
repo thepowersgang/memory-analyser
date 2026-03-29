@@ -11,7 +11,12 @@ impl CpuState {
 
 fn main() {
     let path = "memory_dump-0.dmp";
-    let dump = core_dump::CoreDump::open(path.as_ref());
+    let dump = if true {
+        core_dump::CoreDump::new_stub()
+    }
+    else {
+        core_dump::CoreDump::open(path.as_ref()).expect("Unable to open core dump")
+    };
     let mut debug = debug_info::DebugPool::new();
     for (module_path, base) in dump.modules()
     {
