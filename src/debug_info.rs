@@ -167,7 +167,8 @@ enum VariablePosition {
 pub struct TypeRef(usize);
 
 pub enum Type {
-    Composite(CompositeType),
+    Struct(CompositeType),
+    Union(CompositeType),
     Primtive(PrimitiveType),
     Pointer(TypeRef),
 }
@@ -179,9 +180,8 @@ pub struct CompositeType {
     fields: Vec<CompositeField>,
 }
 impl CompositeType {
-    /// Check if this is a named type with a given prefix (e.g. for finding `std::vector<`)
-    pub fn is_name_prefix(&self, prefix: &str) -> bool {
-        self.name.starts_with(prefix)
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn iter_fields(&self) -> impl Iterator<Item=&CompositeField> {

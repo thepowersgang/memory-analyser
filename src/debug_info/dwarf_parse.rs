@@ -32,7 +32,7 @@ impl super::DebugPool
 
                 enum State {
                     Root,
-                    InType(String, TypeRef, Vec<CompositeField>),
+                    InType(String, TypeRef, bool, Vec<CompositeField>),
                     InFunction(String, FunctionRecord),
                     // Should only exist underneath a `InFunction`
                     FcnScope(PcRanges),
@@ -53,7 +53,7 @@ impl super::DebugPool
                         State::Root => {},
                         State::InFunction(n, ..) => return Some(n),
                         State::FcnScope(..) => {},
-                        State::InType(n, _, _) => return Some(n),
+                        State::InType(n, _, _, _) => return Some(n),
                         }
                     }
                     None
@@ -80,9 +80,13 @@ impl super::DebugPool
                                 println!("END fn {}", n);
                                 self.functions.insert(n, fr);
                             } 
-                            State::InType(name, ty, fields) => {
+                            State::InType(name, ty, is_union, fields) => {
                                 println!("END type {}", name);
-                                self.types[ty.0] = Some(Type::Composite(CompositeType { name, fields }));
+                                self.types[ty.0] = Some(if is_union {
+                                    Type::Union(CompositeType { name, fields })
+                                }else {
+                                    Type::Struct(CompositeType { name, fields })
+                                });
                             }
                             _ => {},
                             }
@@ -152,7 +156,7 @@ impl super::DebugPool
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let name = get_name(&debug_info, &unit, v);
                             let full_name = get_scoped_name(&stack, "struct ", name, v.offset);
-                            stack.push(State::InType(full_name, ty_ref, vec![]));
+                            stack.push(State::InType(full_name, ty_ref, false, vec![]));
                             continue;
                         },
                         gimli::DW_TAG_enumeration_type => {
@@ -163,7 +167,7 @@ impl super::DebugPool
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let name = get_name(&debug_info, &unit, v);
                             let full_name = get_scoped_name(&stack, "union ", name, v.offset);
-                            stack.push(State::InType(full_name, ty_ref, Vec::new()));
+                            stack.push(State::InType(full_name, ty_ref, true, Vec::new()));
                             continue;
                         },
                         gimli::DW_TAG_const_type => {
@@ -272,7 +276,7 @@ impl super::DebugPool
                             _ => {},
                             }
                         },
-                        State::InType(ty_name, _, fields) => {
+                        State::InType(ty_name, _, is_union, fields) => {
                             match v.tag()
                             {
                             gimli::DW_TAG_GNU_template_template_param => {},
@@ -288,7 +292,7 @@ impl super::DebugPool
                                 let name = get_name(&debug_info, &unit, v);
                                 let offset = match v.attr_value(gimli::DW_AT_data_member_location)
                                     {
-                                    None => todo!("No offset? in `{ty_name}` {name:?} - v={:?}", v),
+                                    None => if *is_union { 0 } else { todo!("No offset? in `{ty_name}` {name:?} - v={:?}", v) },
                                     Some(v) => v.udata_value().unwrap(),
                                     };
                                 let ty = match v.attr_value(gimli::DW_AT_type)

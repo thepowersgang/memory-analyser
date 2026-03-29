@@ -13,8 +13,13 @@ fn main() {
     let path = "memory_dump-0.dmp";
     let dump = core_dump::CoreDump::open(path.as_ref());
     let mut debug = debug_info::DebugPool::new();
-    for (module_path, base) in dump.modules() {
-        debug.add_file(&module_path, base);
+    for (module_path, base) in dump.modules()
+    {
+        match debug.add_file(&module_path, base)
+        {
+        Ok(()) => {},
+        Err(e) => panic!("Failed to load {:?}: {:?}", path, e),
+        }
     }
 
     let state_in_dump = dump.get_thread(0);
@@ -26,11 +31,14 @@ fn main() {
 
 fn visit_type(debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64) {
     match ty {
-    debug_info::Type::Composite(composite_type) => {
+    debug_info::Type::Struct(composite_type) => {
         // TODO: Unions need extra handling
         for f in composite_type.iter_fields() {
             visit_type(debug, dump, &debug.get_type(&f.ty), addr + f.offset);
         }
+    },
+    debug_info::Type::Union(composite_type) => {
+        todo!("Found union, needs handling: {:?}", composite_type.name());
     },
     debug_info::Type::Primtive(_) => {},
     debug_info::Type::Pointer(dst_ty) => {
