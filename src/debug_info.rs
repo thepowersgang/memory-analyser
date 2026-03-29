@@ -3,6 +3,7 @@
 pub struct DebugPool {
     functions: ::std::collections::HashMap<String,FunctionRecord>,
     type_lookup: ::std::collections::HashMap< (usize, ::gimli::UnitOffset), TypeRef >,
+    backtrace_data: Vec<(u64, BacktraceType,)>,
     types: Vec<Option<Type>>,
     next_unit_index: usize,
 }
@@ -10,7 +11,7 @@ impl DebugPool {
     pub fn new() -> Self {
         Default::default()
     }
-    pub fn add_file(&mut self, path: &::std::path::Path, base: u64)
+    pub fn add_file(&mut self, path: &::std::path::Path, base: u64) -> Result<(), Box<dyn ::std::error::Error>>
     {
         let tmp_path = path.with_added_extension("debug");
         let path = if tmp_path.exists() {
@@ -20,8 +21,8 @@ impl DebugPool {
             path
         };
         // Load with ELF loader
-        let bytes = ::std::fs::read(path).unwrap();
-        let elf_file = ::elf::ElfBytes::<::elf::endian::LittleEndian>::minimal_parse(&bytes).expect("Open test1");
+        let bytes = ::std::fs::read(path)?;
+        let elf_file = ::elf::ElfBytes::<::elf::endian::LittleEndian>::minimal_parse(&bytes)?;
         let debug_info = ::gimli::Dwarf::load::<_,::elf::ParseError>(|section| {
             let s = elf_file.section_header_by_name(section.name())?;
             let section_data = match s {
@@ -29,8 +30,20 @@ impl DebugPool {
                 None => b"",
             };
             Ok(::gimli::EndianSlice::new(section_data, ::gimli::LittleEndian))
-        }).unwrap();
-        //::gimli::DebugFrame::new(section, endian)
+        })?;
+
+        if let Some(debug_frame) = elf_file.section_header_by_name(".debug_frame")?
+        {
+            let debug_frame: ::std::rc::Rc<[u8]> = elf_file.section_data(&debug_frame)?.0.into();
+            let debug_frame = ::gimli::EndianRcSlice::new(debug_frame, ::gimli::LittleEndian);
+            self.backtrace_data.push((base, BacktraceType::Debug(::gimli::DebugFrame::from(debug_frame)),));
+        }
+        else if let Some(eh_frame) = elf_file.section_header_by_name(".eh_frame")?
+        {
+            let eh_frame: ::std::rc::Rc<[u8]> = elf_file.section_data(&eh_frame)?.0.into();
+            let eh_frame = ::gimli::EndianRcSlice::new(eh_frame, ::gimli::LittleEndian);
+            self.backtrace_data.push((base, BacktraceType::Eh(::gimli::EhFrame::from(eh_frame)),));
+        }
         fn get_name<'a, E>(debug_info: &::gimli::Dwarf<::gimli::EndianSlice<'a, E>>, unit: &gimli::Unit<::gimli::EndianSlice<'a, E>>, v: &::gimli::DebuggingInformationEntry<::gimli::EndianSlice<'a, E>>) -> Option<&'a str>
         where
             E: ::gimli::Endianity,
@@ -104,12 +117,7 @@ impl DebugPool {
                             match stack.pop().unwrap() {
                             State::InFunction(n, fr) => {
                                 println!("END fn {}", n);
-                                let was_main = n == "::main";
                                 self.functions.insert(n, fr);
-                                if was_main {
-                                    println!("main.hir_crate = {:?}", self.functions["::main"].variables["hir_crate"]);
-                                    return
-                                }
                             } 
                             State::InType(name, ty, fields) => {
                                 println!("END type {}", name);
@@ -212,7 +220,7 @@ impl DebugPool {
                         gimli::DW_TAG_rvalue_reference_type => {},
                         _ => {},
                         }
-                        match stack.last().unwrap_or(&State::Root) {
+                        match stack.last_mut().unwrap_or(&mut State::Root) {
                         State::Root => {
                             match v.tag()
                             {
@@ -222,7 +230,7 @@ impl DebugPool {
                             _ => {},
                             }
                         },
-                        &State::InFunction(_, FunctionRecord { ref pc_range, .. }) | &State::FcnScope(ref pc_range) => {
+                        &mut State::InFunction(_, FunctionRecord { ref pc_range, .. }) | &mut State::FcnScope(ref pc_range) => {
                             match v.tag()
                             {
                             gimli::DW_TAG_lexical_block => {
@@ -250,7 +258,7 @@ impl DebugPool {
                                 let name = get_name(&debug_info, &unit, v);
                                 let loc = v.attr_value(gimli::DW_AT_location);
                                 let ty = v.attr_value(gimli::DW_AT_type);
-                                println!(" > Variable {:?} @ {:?} {:?}", name, loc, ty);
+                                //println!(" > Variable {:?} @ {:?} {:?}", name, loc, ty);
                                 // Record the type and offset
                                 let pos = match loc {
                                     Some(v) => match v
@@ -303,7 +311,7 @@ impl DebugPool {
                             _ => {},
                             }
                         },
-                        State::InType(ty_name, _, _) => {
+                        State::InType(ty_name, _, fields) => {
                             match v.tag()
                             {
                             gimli::DW_TAG_GNU_template_template_param => {},
@@ -317,9 +325,31 @@ impl DebugPool {
 
                             gimli::DW_TAG_member => {
                                 let name = get_name(&debug_info, &unit, v);
-                                let pos = v.attr(gimli::DW_AT_data_member_location);
-                                let ty = v.attr(gimli::DW_AT_type);
-                                println!("> {ty_name}.field {name:?} @ {pos:?}: {ty:?} {v:?}");
+                                let offset = match v.attr_value(gimli::DW_AT_data_member_location)
+                                    {
+                                    None => todo!("No offset? in `{ty_name}` {name:?} - v={:?}", v),
+                                    Some(v) => v.udata_value().unwrap(),
+                                    };
+                                let ty = match v.attr_value(gimli::DW_AT_type)
+                                    {
+                                    None => None,
+                                    Some(ty) => {
+                                        Some(match ty {
+                                            gimli::AttributeValue::UnitRef(r) => self.dwarf_type_ref(unit_index, r),
+                                            _ => todo!("Register type: {:?} {:?}", ty, ty.offset_value()),
+                                            })
+                                    },
+                                    };
+                                //println!("> MEMBER `{ty_name}` FIELD {name:?} @ {pos:?}: {ty:?} {v:?}");
+                                fields.push(CompositeField {
+                                    name: match name
+                                        {
+                                        Some(name) => name.to_owned(),
+                                        None => todo!("Unnamed fields"),
+                                        },
+                                    ty: ty.unwrap(),
+                                    offset,
+                                });
                             },
                             _ => todo!("InType: {:x?}", v),
                             }
@@ -335,12 +365,30 @@ impl DebugPool {
             gimli::UnitType::SplitType { type_signature, type_offset } => todo!(),
             }
         }
-        // Parse type info
-        todo!()
+        Ok( () )
     }
 
     pub fn get_caller(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump) -> crate::CpuState {
-        todo!("get_caller")
+        let mut context = ::gimli::UnwindContext::new();
+        for (base, info) in &self.backtrace_data {
+            let bases = ::gimli::BaseAddresses::default().set_text(*base);
+            use ::gimli::UnwindSection;
+            match match info 
+                {
+                BacktraceType::Debug(debug_frame) =>
+                    debug_frame.unwind_info_for_address(&bases, &mut context, state.get_pc(), ::gimli::DebugFrame::cie_from_offset),
+                BacktraceType::Eh(eh_frame) => 
+                    eh_frame.unwind_info_for_address(&bases, &mut context, state.get_pc(), ::gimli::EhFrame::cie_from_offset),
+                }
+            {
+            Ok(i) => {
+                todo!("unwind: {:?}", i);
+            },
+            Err(gimli::Error::NoUnwindInfoForAddress) => continue,
+            Err(e) => todo!("Unwind error: {:?}", e),
+            }
+        }
+        todo!("get_caller: no entry")
     }
 
     // Get the storage address of a variable
@@ -375,6 +423,11 @@ impl DebugPool {
                 rv
             })
     }
+}
+
+enum BacktraceType {
+    Debug(::gimli::DebugFrame<::gimli::EndianRcSlice<::gimli::LittleEndian>>),
+    Eh(::gimli::EhFrame<::gimli::EndianRcSlice<::gimli::LittleEndian>>),
 }
 
 #[derive(Clone, Copy)]
