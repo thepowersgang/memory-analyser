@@ -2,20 +2,26 @@ mod core_dump;
 mod debug_info;
 
 struct CpuState {
+    // AMD64:
+    pc: u64,
+    gprs: [u64; 16],
 }
 impl CpuState {
+    fn stub() -> Self {
+        CpuState { pc: 0, gprs: [0; 16] }
+    }
     fn get_pc(&self) -> u64 {
-        todo!("get_pc")
+        self.pc
     }
 }
 
 fn main() {
-    let path = "memory_dump-0.dmp";
-    let dump = if true {
-        core_dump::CoreDump::new_stub()
+    let path = ::std::env::args().nth(1);
+    let dump = if let Some(path) = path {
+        core_dump::CoreDump::open(path.as_ref()).expect("Unable to open core dump")
     }
     else {
-        core_dump::CoreDump::open(path.as_ref()).expect("Unable to open core dump")
+        core_dump::CoreDump::new_stub()
     };
     let mut debug = debug_info::DebugPool::new();
     for (module_path, base) in dump.modules()

@@ -27,14 +27,14 @@ struct MemoryRange {
     // /// Memory flags
     // flags: u8,
     /// Source data offset in named file
-    file_ofs: u64,
+    _file_ofs: u64,
     ///// Source file
     //file_path: String,
 }
 impl CoreDump {
     pub fn new_stub() -> CoreDump {
         CoreDump {
-            chunk_cache: ChunkCache::new(::std::fs::File::open("/dev/null").unwrap(), 0),
+            chunk_cache: ChunkCache::new(::std::io::BufReader::new(::std::fs::File::open("/dev/null").unwrap()), 0),
             modules: vec![
                 ReferencedFile {
                     base: 0,
@@ -45,15 +45,16 @@ impl CoreDump {
             chunk_size: 1 << 20,
             file_chunks: Vec::new(),
             threads: vec![
-                super::CpuState {}
+                super::CpuState::stub()
             ]
         }
     }
     pub fn open(path: &std::path::Path) -> ::std::io::Result<CoreDump> {
-        let mut fp = ::std::fs::File::open(path)?;
+        let mut fp = ::std::io::BufReader::new(::std::fs::File::open(path)?);
         // Header
         let header = raw::FileHeader::from_reader(&mut fp)?;
         header.check_magic()?;
+        println!("{:?}", header);
         // Memory ranges
         let mut memory_ranges = Vec::with_capacity(header.n_ranges as usize);
         let mut modules = Vec::<ReferencedFile>::new();
@@ -67,6 +68,7 @@ impl CoreDump {
                 ::std::io::Read::read_exact(&mut fp, &mut b)?;
                 String::from_utf8(b).unwrap()
             };
+            println!("{:?}: {:?}", hdr, name);
             if name != "" {
                 // Add the module
                 if let Some(v) = modules.iter_mut().find(|v| v.path == name) {
@@ -89,7 +91,7 @@ impl CoreDump {
             last_v_chunk = next_chunk;
 
             memory_ranges.push(MemoryRange {
-                file_ofs: hdr.file_ofs,
+                _file_ofs: hdr.file_ofs,
                 first_chunk: n_chunks,
                 size: hdr.size,
                 v_start: hdr.v_start,
@@ -100,16 +102,40 @@ impl CoreDump {
         let file_chunks = {
             let mut chunks = Vec::with_capacity(header.n_chunks as usize);
             let mut empty_chunk = vec![0; header.chunk_size as usize];
-            for _ in 0 .. header.n_chunks {
+            for _i in 0 .. header.n_chunks {
                 use ::std::io::Seek;
                 chunks.push(fp.seek(::std::io::SeekFrom::Current(0))?);
+                println!("Chunk {} @ {}", _i, chunks.last().unwrap());
                 raw::read_chunk(&mut fp, &mut empty_chunk)?;
             }
             chunks
         };
         // Current thread register dump
         let mut threads = Vec::new();
-        // TODO
+        for _ in 0 .. 1 {
+            threads.push(super::CpuState {
+                pc: raw::read_u64(&mut fp)?,
+                gprs: [
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                    
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                    raw::read_u64(&mut fp)?,
+                ]
+            });
+        }
 
         Ok(CoreDump {
             chunk_cache: ChunkCache::new(fp, header.chunk_size as usize),
@@ -160,7 +186,7 @@ impl CoreDump {
 }
 
 struct ChunkCache {
-    fp: ::std::cell::RefCell<::std::fs::File>,
+    fp: ::std::cell::RefCell<::std::io::BufReader<::std::fs::File>>,
     uses: ::std::cell::Cell<usize>,
     ents: Vec<::std::cell::RefCell<ChunkChacheEnt>>,
 }
@@ -170,7 +196,7 @@ struct ChunkChacheEnt {
     data: Vec<u8>,
 }
 impl ChunkCache {
-    fn new(fp: ::std::fs::File, chunk_size: usize) -> Self {
+    fn new(fp: ::std::io::BufReader<::std::fs::File>, chunk_size: usize) -> Self {
         ChunkCache {
             fp: ::std::cell::RefCell::new(fp),
             uses: Default::default(),
@@ -197,6 +223,7 @@ impl ChunkCache {
 }
 
 mod raw {
+    #[derive(Debug)]
     pub struct FileHeader {
         pub magic: [u8; 12],
         /// Number of file mappings/ranges
@@ -227,6 +254,7 @@ mod raw {
         }
     }
 
+    #[derive(Debug)]
     pub struct MemoryRangeHeader {
         /// Virtual memory address of start of this range
         pub v_start: u64,
@@ -235,10 +263,11 @@ mod raw {
         /// Source data offset in named file
         pub file_ofs: u64,
 
-        /// Various flags, TODO
-        pub flags: u16,
         /// Length of the source file name (following this structure)
         pub name_length: u16,
+        /// Various flags, TODO
+        pub _flags: u16,
+        _pad: [u16; 2],
     }
     impl MemoryRangeHeader {
         pub fn from_reader(fp: &mut impl ::std::io::Read) -> ::std::io::Result<Self> {
@@ -246,19 +275,40 @@ mod raw {
                 v_start: u64::from_le_bytes(read_bytes(fp)?),
                 size: u64::from_le_bytes(read_bytes(fp)?),
                 file_ofs: u64::from_le_bytes(read_bytes(fp)?),
-                flags: u16::from_le_bytes(read_bytes(fp)?),
                 name_length: u16::from_le_bytes(read_bytes(fp)?),
+                _flags: u16::from_le_bytes(read_bytes(fp)?),
+                _pad: [u16::from_le_bytes(read_bytes(fp)?), u16::from_le_bytes(read_bytes(fp)?)],
             })
         }
     }
 
-    pub fn read_chunk(fp: &mut impl ::std::io::Read, dst: &mut Vec<u8>) -> ::std::io::Result<()> {
-        todo!()
+    pub fn read_chunk(fp: &mut (impl ::std::io::BufRead + ::std::io::Seek), dst: &mut Vec<u8>) -> ::std::io::Result<()> {
+        let mut stream = ::flate2::bufread::ZlibDecoder::new(fp);
+        match ::std::io::Read::read_exact(&mut stream, dst) {
+        Ok(_) => {},
+        Err(e) => {
+            println!("@{}\n", stream.into_inner().seek(::std::io::SeekFrom::Current(0))?);
+            return Err(e.into())
+        },
+        }
+        match ::std::io::Read::read(&mut stream, &mut [0]) {
+        Ok(0) => {},
+        Ok(n) => panic!(""),
+        Err(e) => {
+            println!("@{}\n", stream.into_inner().seek(::std::io::SeekFrom::Current(0))?);
+            return Err(e.into())
+        },
+        }
+        Ok(())
     }
 
     fn read_bytes<const N: usize>(fp: &mut impl ::std::io::Read) -> ::std::io::Result<[u8; N]> {
         let mut v = [0; N];
         fp.read_exact(&mut v)?;
         Ok(v)
+    }
+
+    pub fn read_u64(fp: &mut impl ::std::io::Read) -> ::std::io::Result<u64> {
+        Ok(u64::from_le_bytes(read_bytes(fp)?))
     }
 }

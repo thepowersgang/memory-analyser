@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 elf = "0.8.0"
+flate2 = "1.1.9"
 gimli = "0.33.0"
