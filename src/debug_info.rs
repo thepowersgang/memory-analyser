@@ -231,7 +231,9 @@ impl DebugPool {
     pub fn get_type(&self, ty: &TypeRef) -> &Type {
         match self.types[ty.0] {
         Some(ref v) => v,
-        None => panic!("Type not populated: {:?}", ty)
+        None => {
+            panic!("Type not populated: {:?} = {:?}", ty, self.type_lookup.iter().find(|(k,v)| v.0 == ty.0))
+        }
         }
     }
 
@@ -319,6 +321,7 @@ pub enum Type {
     Union(CompositeType),
     Primtive(PrimitiveType),
     Pointer(TypeRef),
+    Alias(TypeRef),
 }
 pub struct PrimitiveType {
     bits: u32,

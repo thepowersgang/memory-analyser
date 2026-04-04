@@ -54,12 +54,13 @@ fn main() {
     let state_main = debug.get_caller(&state_in_dump, &dump);
     println!("STATE: {}", state_main);
 
-    let (addr, ty) = debug.get_variable(&state_main, &dump, "hir_crate");
+    let (addr, ty) = debug.get_variable(&state_main, &dump, "crate");
     visit_type(&debug, &dump, &debug.get_type(&ty), addr);
 }
 
 fn visit_type(debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64) {
     match ty {
+    debug_info::Type::Alias(ty) => visit_type(debug, dump, debug.get_type(ty), addr),
     debug_info::Type::Struct(composite_type) => {
         for f in composite_type.iter_fields() {
             visit_type(debug, dump, &debug.get_type(&f.ty), addr + f.offset);

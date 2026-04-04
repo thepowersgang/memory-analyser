@@ -3,6 +3,18 @@ use super::{FunctionRecord, PcRanges, PcRange, VariableRecord, VariablePosition,
 
 impl super::DebugPool
 {
+    fn get_typeref_from_attr(&mut self, unit_index: usize, v: &::gimli::DebuggingInformationEntry<::gimli::EndianSlice<::gimli::LittleEndian>>) -> Option<TypeRef>
+    {
+        match v.attr_value(::gimli::DW_AT_type)
+        {
+        None => None,
+        Some(ty) => 
+            Some(match ty {
+                gimli::AttributeValue::UnitRef(r) => self.dwarf_type_ref(unit_index, r),
+                _ => todo!("Register type: {:?} {:?}", ty, ty.offset_value()),
+                }),
+        }
+    }
     pub(super) fn add_variables_types_from_dwarf(&mut self, load_base: u64, debug_info: &::gimli::Dwarf<::gimli::EndianSlice<::gimli::LittleEndian>>)
     {
         fn get_name<'a, E>(debug_info: &::gimli::Dwarf<::gimli::EndianSlice<'a, E>>, unit: &gimli::Unit<::gimli::EndianSlice<'a, E>>, v: &::gimli::DebuggingInformationEntry<::gimli::EndianSlice<'a, E>>) -> Option<&'a str>
@@ -32,6 +44,7 @@ impl super::DebugPool
 
                 enum State {
                     Root,
+                    Namespace(String),
                     InType(String, TypeRef, bool, Vec<CompositeField>),
                     InFunction(String, FunctionRecord),
                     // Should only exist underneath a `InFunction`
@@ -41,6 +54,7 @@ impl super::DebugPool
                     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                         match self {
                         Self::Root => write!(f, "Root"),
+                        Self::Namespace(name) => f.debug_tuple("NamedScope").field(name).finish(),
                         Self::InType(name, ..) => f.debug_tuple("InType").field(name).finish(),
                         Self::InFunction(name, ..) => f.debug_tuple("InFunction").field(name).finish(),
                         Self::FcnScope(arg0) => f.debug_tuple("FcnScope").field(arg0).finish(),
@@ -51,6 +65,7 @@ impl super::DebugPool
                     for v in stack.iter().rev() {
                         match v {
                         State::Root => {},
+                        State::Namespace(n) => return Some(n),
                         State::InFunction(n, ..) => return Some(n),
                         State::FcnScope(..) => {},
                         State::InType(n, _, _, _) => return Some(n),
@@ -90,6 +105,7 @@ impl super::DebugPool
                             _ => {},
                             }
                         }
+                        //println!("{} {:?} {:x?} ({}/@{})", v.depth, stack, v.tag(), unit_index, v.offset.0);
                         if (v.depth as usize) > stack.len() {
                             continue ;
                         }
@@ -132,9 +148,13 @@ impl super::DebugPool
                                 }
                             }
                         };
-                        //println!("{} {:?} {:x?}", v.depth, stack, v);
                         match v.tag()
                         {
+                        gimli::DW_TAG_namespace => {
+                            let name = get_name(&debug_info, &unit, v);
+                            let full_name = get_scoped_name(&stack, "", name, v.offset);
+                            stack.push(State::Namespace(full_name));
+                        },
                         gimli::DW_TAG_subprogram => {
                             let name = get_name(&debug_info, &unit, v);
                             let full_name = get_scoped_name(&stack, "", name, v.offset);
@@ -156,7 +176,12 @@ impl super::DebugPool
                         },
 
                         gimli::DW_TAG_typedef => {
-                            //println!("> typedef: {:?}", get_name(&debug_info, &unit, v));
+                            let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
+                            let target_ty = self.get_typeref_from_attr(unit_index, v);
+                            println!("> {ty_ref:?} typedef: {:?}", get_name(&debug_info, &unit, v));
+                            if let Some(target_ty) = target_ty {
+                                self.types[ty_ref.0] = Some(Type::Alias(target_ty))
+                            }
                             continue
                         },
                         gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => {
@@ -167,7 +192,8 @@ impl super::DebugPool
                             continue;
                         },
                         gimli::DW_TAG_enumeration_type => {
-                            //println!("> enum: {:?}", get_name(&debug_info, &unit, v));
+                            let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
+                            println!("> {ty_ref:?} enum: {:?}", get_name(&debug_info, &unit, v));
                             continue;
                         },
                         gimli::DW_TAG_union_type => {
@@ -178,15 +204,22 @@ impl super::DebugPool
                             continue;
                         },
                         gimli::DW_TAG_const_type => {
-                            //println!("> const_type: {:?}", get_name(&debug_info, &unit, v));
+                            let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
+                            println!("> {ty_ref:?} const_type: {:?}", get_name(&debug_info, &unit, v));
                             continue
                         },
                         gimli::DW_TAG_pointer_type => {
-                            //println!("> pointer_type: {:?}", get_name(&debug_info, &unit, v));
+                            let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
+                            let target_ty = self.get_typeref_from_attr(unit_index, v);
+                            println!("> {ty_ref:?} pointer_type: {:?} = {target_ty:?}", get_name(&debug_info, &unit, v));
+                            if let Some(target_ty) = target_ty {
+                                self.types[ty_ref.0] = Some(Type::Pointer(target_ty));
+                            }
                             continue
                         },
                         gimli::DW_TAG_reference_type => {
-                            //println!("> reference type: {:?}", get_name(&debug_info, &unit, v));
+                            let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
+                            println!("> {ty_ref:?} reference type: {:?}", get_name(&debug_info, &unit, v));
                             continue
                         },
                         gimli::DW_TAG_rvalue_reference_type => {},
@@ -202,6 +235,7 @@ impl super::DebugPool
                             _ => {},
                             }
                         },
+                        State::Namespace(_) => {},
                         &mut State::InFunction(_, FunctionRecord { ref pc_range, .. }) | &mut State::FcnScope(ref pc_range) => {
                             match v.tag()
                             {
@@ -287,10 +321,13 @@ impl super::DebugPool
                             match v.tag()
                             {
                             gimli::DW_TAG_GNU_template_template_param => {},
+                            gimli::DW_TAG_GNU_template_parameter_pack => {},
 
                             gimli::DW_TAG_template_type_parameter => {},
                             gimli::DW_TAG_template_value_parameter => {},
                             gimli::DW_TAG_inheritance => {},
+
+                            gimli::DW_TAG_imported_declaration => {},
 
                             // static
                             gimli::DW_TAG_variable => {},
@@ -299,7 +336,11 @@ impl super::DebugPool
                                 let name = get_name(&debug_info, &unit, v);
                                 let offset = match v.attr_value(gimli::DW_AT_data_member_location)
                                     {
-                                    None => if *is_union { 0 } else { todo!("No offset? in `{ty_name}` {name:?} - v={:?}", v) },
+                                    None => if *is_union { 0 } else {
+                                        // TODO: bitfields have no offset - ignore for now
+                                        println!("No offset? in `{ty_name}` {name:?} - v={:?}", v);
+                                        continue ;
+                                    },
                                     Some(v) => v.udata_value().unwrap(),
                                     };
                                 let ty = match v.attr_value(gimli::DW_AT_type)
@@ -317,7 +358,7 @@ impl super::DebugPool
                                     name: match name
                                         {
                                         Some(name) => name.to_owned(),
-                                        None => todo!("Unnamed fields"),
+                                        None => format!("_#{}", v.offset.0),
                                         },
                                     ty: ty.unwrap(),
                                     offset,
