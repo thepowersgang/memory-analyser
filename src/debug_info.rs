@@ -160,51 +160,48 @@ impl DebugPool {
     // Get the storage address of a variable
     pub fn get_variable(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump, name: &str) -> (u64, TypeRef) {
         let pc = state.get_pc();
-        for (fcn_name, fcn_rec) in &self.functions {
-            //println!("{:?}: {:?}", fcn_name, fcn_rec.pc_range);
-            if fcn_rec.pc_range.contains(pc) {
-                let var = &fcn_rec.variables[name];
-                for r in &var.ranges {
-                    if r.pc_range.contains(pc) {
-                        let p = match &r.position {
-                            VariablePosition::OptimisedOut => todo!("Optimsed out variable"),
-                            VariablePosition::Fixed(p) => *p,
-                            VariablePosition::Expr(items, encoding) => {
-                                let r = ::gimli::EndianReader::new(items.as_slice(), ::gimli::NativeEndian);
-                                let mut e = ::gimli::read::Expression(r).evaluation(*encoding);
-                                let mut r = e.evaluate();
-                                loop {
-                                    use gimli::EvaluationResult as E;
-                                    r = match r.expect("Failure evaluating")
-                                    {
-                                    E::Complete => {
-                                        //let mut b = [0; 16];
-                                        let r= e.result();
-                                        todo!("complete: get result from {:?}", r);
-                                        },
-                                    E::RequiresMemory { address, size, space, base_type } => todo!(),
-                                    E::RequiresRegister { register, base_type }
-                                        => e.resume_with_register(::gimli::Value::U64(get_register(state, &register))),
-                                    E::RequiresFrameBase => todo!("RequiresFrameBase"),
-                                    E::RequiresTls(_) => todo!(),
-                                    E::RequiresCallFrameCfa => todo!(),
-                                    E::RequiresAtLocation(die_reference) => todo!(),
-                                    E::RequiresEntryValue(expression) => todo!(),
-                                    E::RequiresParameterRef(unit_offset) => todo!(),
-                                    E::RequiresRelocatedAddress(_) => todo!(),
-                                    E::RequiresIndexedAddress { index, relocate } => todo!(),
-                                    E::RequiresBaseType(unit_offset) => todo!(),
-                                    };
-                                }
-                            },
-                            };
-                        return (p, var.ty);
-                    }
+        let Some((fcn_name,fcn_rec)) = self.functions.iter().find(|(_,r)| r.pc_range.contains(pc)) else {
+            panic!("get_variable: {:?} - Failed to find function for PC={:#x} ({})", name, pc, self.functions.len())
+        };
+        let Some(var) = &fcn_rec.variables.get(name) else {
+            panic!("get_variable: Variable {} not in function {}", name, fcn_name);
+        };
+        let Some(r) = var.ranges.iter().find(|r| r.pc_range.contains(pc)) else {
+            panic!("Unable to find variable def in {} at PC {:#x}", fcn_name, pc);
+        };
+        let p = match &r.position {
+            VariablePosition::OptimisedOut => todo!("Optimsed out variable"),
+            VariablePosition::Fixed(p) => *p,
+            VariablePosition::Expr(items, encoding) => {
+                let r = ::gimli::EndianReader::new(items.as_slice(), ::gimli::NativeEndian);
+                let mut e = ::gimli::read::Expression(r).evaluation(*encoding);
+                let mut r = e.evaluate();
+                loop {
+                    use gimli::EvaluationResult as E;
+                    r = match r.expect("Failure evaluating")
+                    {
+                    E::Complete => {
+                        //let mut b = [0; 16];
+                        let r= e.result();
+                        todo!("complete: get result from {:?}", r);
+                        },
+                    E::RequiresMemory { address, size, space, base_type } => todo!("RequiresMemory"),
+                    E::RequiresRegister { register, base_type }
+                        => e.resume_with_register(::gimli::Value::U64(get_register(state, &register))),
+                    E::RequiresFrameBase => todo!("RequiresFrameBase"),
+                    E::RequiresTls(_) => todo!(),
+                    E::RequiresCallFrameCfa => todo!(),
+                    E::RequiresAtLocation(die_reference) => todo!(),
+                    E::RequiresEntryValue(expression) => todo!(),
+                    E::RequiresParameterRef(unit_offset) => todo!(),
+                    E::RequiresRelocatedAddress(_) => todo!(),
+                    E::RequiresIndexedAddress { index, relocate } => todo!(),
+                    E::RequiresBaseType(unit_offset) => todo!(),
+                    };
                 }
-                todo!("Unable to find variable def in {} at PC {:#x}", fcn_name, pc);
-            }
-        }
-        panic!("get_variable: {:?} - Failed to find function for PC={:#x} ({})", name, pc, self.functions.len())
+            },
+            };
+        return (p, var.ty);
     }
     pub fn get_type(&self, ty: &TypeRef) -> &Type {
         self.types[ty.0].as_ref().expect("Type not populated")
