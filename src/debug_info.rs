@@ -260,6 +260,7 @@ impl DebugPool {
     }
     fn fmt_type_inner(&self, f: &mut std::fmt::Formatter<'_>, ty: &Type) -> ::std::fmt::Result {
         match ty {
+        Type::Enum(name) => f.write_str(name),
         Type::Struct(composite_type) => f.write_str(&composite_type.name),
         Type::Union(composite_type) => f.write_str(&composite_type.name),
         Type::Primtive(primitive_type) => write!(f, "prim{}", primitive_type.bits),
@@ -361,6 +362,7 @@ pub enum Type {
     Primtive(PrimitiveType),
     Pointer(TypeRef),
     Alias(TypeRef),
+    Enum(String),
 }
 #[derive(Debug)]
 pub struct PrimitiveType {
@@ -371,12 +373,16 @@ pub struct PrimitiveType {
 pub struct CompositeType {
     name: String,
     fields: Vec<CompositeField>,
+    parents: Vec<(u64, TypeRef)>,
 }
 impl CompositeType {
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    pub fn parents(&self) -> impl Iterator<Item=&(u64, TypeRef)> {
+        self.parents.iter()
+    }
     pub fn iter_fields(&self) -> impl Iterator<Item=&CompositeField> {
         self.fields.iter()
     }

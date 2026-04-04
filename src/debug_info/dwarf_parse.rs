@@ -45,7 +45,7 @@ impl super::DebugPool
                 enum State {
                     Root,
                     Namespace(String),
-                    InType(String, TypeRef, bool, Vec<CompositeField>),
+                    InType(CompositeType, TypeRef, bool),
                     InFunction(String, FunctionRecord),
                     // Should only exist underneath a `InFunction`
                     FcnScope(PcRanges),
@@ -55,7 +55,7 @@ impl super::DebugPool
                         match self {
                         Self::Root => write!(f, "Root"),
                         Self::Namespace(name) => f.debug_tuple("NamedScope").field(name).finish(),
-                        Self::InType(name, ..) => f.debug_tuple("InType").field(name).finish(),
+                        Self::InType(ct, ..) => f.debug_tuple("InType").field(&ct.name).finish(),
                         Self::InFunction(name, ..) => f.debug_tuple("InFunction").field(name).finish(),
                         Self::FcnScope(arg0) => f.debug_tuple("FcnScope").field(arg0).finish(),
                         }
@@ -68,7 +68,7 @@ impl super::DebugPool
                         State::Namespace(n) => return Some(n),
                         State::InFunction(n, ..) => return Some(n),
                         State::FcnScope(..) => {},
-                        State::InType(n, _, _, _) => return Some(n),
+                        State::InType(ct, _, _) => return Some(&ct.name),
                         }
                     }
                     None
@@ -94,12 +94,12 @@ impl super::DebugPool
                             State::InFunction(n, fr) => {
                                 self.functions.insert(n, fr);
                             } 
-                            State::InType(name, ty, is_union, fields) => {
+                            State::InType(ct, ty, is_union) => {
                                 //println!("END type {}", name);
                                 self.types[ty.0] = Some(if is_union {
-                                    Type::Union(CompositeType { name, fields })
+                                    Type::Union(ct)
                                 }else {
-                                    Type::Struct(CompositeType { name, fields })
+                                    Type::Struct(ct)
                                 });
                             }
                             _ => {},
@@ -177,7 +177,6 @@ impl super::DebugPool
 
                         gimli::DW_TAG_base_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
-                            //let encoding = v.attr_value(::gimli::DW_AT_encoding);
                             let size_bits = v.attr_value(::gimli::DW_AT_byte_size)
                                 .map(|v| v.udata_value().unwrap() * 8)
                                 .or(v.attr_value(::gimli::DW_AT_bit_size).map(|v| v.udata_value().unwrap()));
@@ -197,23 +196,31 @@ impl super::DebugPool
                             }
                             continue
                         },
+                        gimli::DW_TAG_array_type => {
+                            let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
+                            let target_ty = self.get_typeref_from_attr(unit_index, v);
+                            println!("> {ty_ref:?} array of {:?}", target_ty);
+                        },
                         gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let name = get_name(&debug_info, &unit, v);
-                            let full_name = get_scoped_name(&stack, "struct ", name, v.offset);
-                            stack.push(State::InType(full_name, ty_ref, false, vec![]));
+                            let name = get_scoped_name(&stack, "struct ", name, v.offset);
+                            stack.push(State::InType(CompositeType { name, fields: Vec::new(), parents: Vec::new() }, ty_ref, false, ));
                             continue;
                         },
                         gimli::DW_TAG_enumeration_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
-                            println!("> {ty_ref:?} enum: {:?}", get_name(&debug_info, &unit, v));
+                            let name = get_name(&debug_info, &unit, v);
+                            let name = get_scoped_name(&stack, "enum ", name, v.offset);
+                            println!("> {ty_ref:?} enum: {:?}", name);
+                            self.types[ty_ref.0] = Some(Type::Enum(name));
                             continue;
                         },
                         gimli::DW_TAG_union_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let name = get_name(&debug_info, &unit, v);
-                            let full_name = get_scoped_name(&stack, "union ", name, v.offset);
-                            stack.push(State::InType(full_name, ty_ref, true, Vec::new()));
+                            let name = get_scoped_name(&stack, "struct ", name, v.offset);
+                            stack.push(State::InType(CompositeType { name, fields: Vec::new(), parents: Vec::new() }, ty_ref, true, ));
                             continue;
                         },
                         gimli::DW_TAG_const_type => {
@@ -330,7 +337,7 @@ impl super::DebugPool
                             _ => {},
                             }
                         },
-                        State::InType(ty_name, _, is_union, fields) => {
+                        State::InType(ct, _, is_union) => {
                             match v.tag()
                             {
                             gimli::DW_TAG_GNU_template_template_param => {},
@@ -338,7 +345,22 @@ impl super::DebugPool
 
                             gimli::DW_TAG_template_type_parameter => {},
                             gimli::DW_TAG_template_value_parameter => {},
-                            gimli::DW_TAG_inheritance => {},
+                            gimli::DW_TAG_inheritance => {
+                                println!("in {n:?}: {v:?}", n = ct.name);
+                                let inner_type = self.get_typeref_from_attr(unit_index, v).expect("No parent type");
+                                let inner_ofs = v.attr_value(::gimli::DW_AT_data_member_location)
+                                    .expect("no data_member_location");
+                                let inner_ofs = match inner_ofs {
+                                    gimli::AttributeValue::Exprloc(e) => {
+                                        // Ignore?
+                                        continue ;
+                                    },
+                                    gimli::AttributeValue::Udata(v) => v,
+                                    gimli::AttributeValue::Data8(v) => v,
+                                    a => todo!("{:?}", a),
+                                    };
+                                ct.parents.push((inner_ofs, inner_type));
+                            },
 
                             gimli::DW_TAG_imported_declaration => {},
 
@@ -351,23 +373,14 @@ impl super::DebugPool
                                     {
                                     None => if *is_union { 0 } else {
                                         // TODO: bitfields have no offset - ignore for now
-                                        println!("No offset? in `{ty_name}` {name:?} - v={:?}", v);
+                                        println!("No offset? in `{ty_name}` {name:?} - v={v:?}", ty_name=ct.name);
                                         continue ;
                                     },
                                     Some(v) => v.udata_value().unwrap(),
                                     };
-                                let ty = match v.attr_value(gimli::DW_AT_type)
-                                    {
-                                    None => None,
-                                    Some(ty) => {
-                                        Some(match ty {
-                                            gimli::AttributeValue::UnitRef(r) => self.dwarf_type_ref(unit_index, r),
-                                            _ => todo!("Register type: {:?} {:?}", ty, ty.offset_value()),
-                                            })
-                                    },
-                                    };
+                                let ty = self.get_typeref_from_attr(unit_index, v);
                                 //println!("> MEMBER `{ty_name}` FIELD {name:?} @ {pos:?}: {ty:?} {v:?}");
-                                fields.push(CompositeField {
+                                ct.fields.push(CompositeField {
                                     name: match name
                                         {
                                         Some(name) => name.to_owned(),

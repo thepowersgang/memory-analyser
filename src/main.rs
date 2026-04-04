@@ -70,8 +70,15 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             return ;
         }
         if composite_type.name().starts_with(":std::struct vector<") {
-            // Get the item count, and seek through
+            // TODO: Get the item count, and seek through
             return ;
+        }
+        if composite_type.name().starts_with(":std::struct map<") {
+            // TODO: Decode the map
+            return ;
+        }
+        for (ofs,ty) in composite_type.parents() {
+            visit_type(depth+1, debug, dump, &debug.get_type(ty), addr + ofs);
         }
         for f in composite_type.iter_fields() {
             visit_type(depth+1, debug, dump, &debug.get_type(&f.ty), addr + f.offset);
@@ -80,6 +87,7 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
     debug_info::Type::Union(composite_type) => {
         todo!("Found union, needs handling: {:?}", composite_type.name());
     },
+    debug_info::Type::Enum(_) => {},
     debug_info::Type::Primtive(_) => {},
     debug_info::Type::Pointer(dst_ty) => {
         let addr = dump.read_ptr(addr);
