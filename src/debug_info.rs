@@ -17,7 +17,7 @@ impl<'s> ElfFiles<'s> {
                 ::elf::ElfBytes::minimal_parse(&storage.0)?
             },
             file_debug: if path_debug.exists() {
-                storage.1 = ::std::fs::read(path)?;
+                storage.1 = ::std::fs::read(path_debug)?;
                 Some(::elf::ElfBytes::minimal_parse(&storage.1)?)
             } else {
                 None
@@ -84,15 +84,21 @@ impl DebugPool {
             let eh_frame = ::gimli::EndianRcSlice::new(eh_frame, ::gimli::LittleEndian);
             self.backtrace_data.push((base, section_base, BacktraceType::Eh(::gimli::EhFrame::from(eh_frame)),));
         }
+        else {
+            // No unwind/backtrace data
+        }
+
         let debug_info = ::gimli::Dwarf::load::<_,::elf::ParseError>(|section| {
             let s = elf_files.section_data_opt(section.name())?;
+            //println!("{} {}: {:?}", path.display(), section.name(), s.as_ref().map(|v| v.0));
             let section_data = match s {
                 Some((_,sdata)) => sdata,
                 None => b"",
             };
             Ok(::gimli::EndianSlice::new(section_data, ::gimli::LittleEndian))
         })?;
-        self.add_variables_types_from_dwarf(&debug_info);
+        self.add_variables_types_from_dwarf(base, &debug_info);
+        println!("LOADED {}", path.display());
         Ok( () )
     }
 
@@ -115,13 +121,6 @@ impl DebugPool {
                 }
             {
             Ok(i) => {
-                fn get_register(state: &crate::CpuState, register: &::gimli::Register) -> u64 {
-                    match register.0 {
-                    i @ 0 .. 16 => state.gprs[i as usize],
-                    16 => state.pc,
-                    _ => todo!("get_register: {:?}", register),
-                    }
-                }
                 let cfa = match i.cfa()
                     {
                     &gimli::CfaRule::RegisterAndOffset { register, offset } => get_register(state, &register).checked_add_signed(offset).unwrap(),
@@ -162,21 +161,50 @@ impl DebugPool {
     pub fn get_variable(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump, name: &str) -> (u64, TypeRef) {
         let pc = state.get_pc();
         for (fcn_name, fcn_rec) in &self.functions {
+            //println!("{:?}: {:?}", fcn_name, fcn_rec.pc_range);
             if fcn_rec.pc_range.contains(pc) {
                 let var = &fcn_rec.variables[name];
                 for r in &var.ranges {
                     if r.pc_range.contains(pc) {
-                        match &r.position {
-                        VariablePosition::OptimisedOut => todo!("Optimsed out variable"),
-                        VariablePosition::Fixed(_) => todo!(),
-                        VariablePosition::Expr(items) => todo!(),
-                        }
+                        let p = match &r.position {
+                            VariablePosition::OptimisedOut => todo!("Optimsed out variable"),
+                            VariablePosition::Fixed(p) => *p,
+                            VariablePosition::Expr(items, encoding) => {
+                                let r = ::gimli::EndianReader::new(items.as_slice(), ::gimli::NativeEndian);
+                                let mut e = ::gimli::read::Expression(r).evaluation(*encoding);
+                                let mut r = e.evaluate();
+                                loop {
+                                    use gimli::EvaluationResult as E;
+                                    r = match r.expect("Failure evaluating")
+                                    {
+                                    E::Complete => {
+                                        //let mut b = [0; 16];
+                                        let r= e.result();
+                                        todo!("complete: get result from {:?}", r);
+                                        },
+                                    E::RequiresMemory { address, size, space, base_type } => todo!(),
+                                    E::RequiresRegister { register, base_type }
+                                        => e.resume_with_register(::gimli::Value::U64(get_register(state, &register))),
+                                    E::RequiresFrameBase => todo!("RequiresFrameBase"),
+                                    E::RequiresTls(_) => todo!(),
+                                    E::RequiresCallFrameCfa => todo!(),
+                                    E::RequiresAtLocation(die_reference) => todo!(),
+                                    E::RequiresEntryValue(expression) => todo!(),
+                                    E::RequiresParameterRef(unit_offset) => todo!(),
+                                    E::RequiresRelocatedAddress(_) => todo!(),
+                                    E::RequiresIndexedAddress { index, relocate } => todo!(),
+                                    E::RequiresBaseType(unit_offset) => todo!(),
+                                    };
+                                }
+                            },
+                            };
+                        return (p, var.ty);
                     }
                 }
                 todo!("Unable to find variable def in {} at PC {:#x}", fcn_name, pc);
             }
         }
-        panic!("get_variable: {:?} - Failed to find function for PC={:#x}", name, pc)
+        panic!("get_variable: {:?} - Failed to find function for PC={:#x} ({})", name, pc, self.functions.len())
     }
     pub fn get_type(&self, ty: &TypeRef) -> &Type {
         self.types[ty.0].as_ref().expect("Type not populated")
@@ -189,6 +217,14 @@ impl DebugPool {
                 self.types.push(None);
                 rv
             })
+    }
+}
+
+fn get_register(state: &crate::CpuState, register: &::gimli::Register) -> u64 {
+    match register.0 {
+    i @ 0 .. 16 => state.gprs[i as usize],
+    16 => state.pc,
+    _ => todo!("get_register: {:?}", register),
     }
 }
 
@@ -244,7 +280,7 @@ struct VariableRange {
 enum VariablePosition {
     OptimisedOut,
     Fixed(u64),
-    Expr(Vec<u8>),  // see `gimli::read::Expression`
+    Expr(Vec<u8>, ::gimli::Encoding),  // see `gimli::read::Expression`
 }
 
 /// Reference to a type in the debug tree

@@ -3,7 +3,7 @@ use super::{FunctionRecord, PcRanges, PcRange, VariableRecord, VariablePosition,
 
 impl super::DebugPool
 {
-    pub(super) fn add_variables_types_from_dwarf(&mut self, debug_info: &::gimli::Dwarf<::gimli::EndianSlice<::gimli::LittleEndian>>)
+    pub(super) fn add_variables_types_from_dwarf(&mut self, load_base: u64, debug_info: &::gimli::Dwarf<::gimli::EndianSlice<::gimli::LittleEndian>>)
     {
         fn get_name<'a, E>(debug_info: &::gimli::Dwarf<::gimli::EndianSlice<'a, E>>, unit: &gimli::Unit<::gimli::EndianSlice<'a, E>>, v: &::gimli::DebuggingInformationEntry<::gimli::EndianSlice<'a, E>>) -> Option<&'a str>
         where
@@ -77,7 +77,6 @@ impl super::DebugPool
                         while stack.len() > v.depth as usize {
                             match stack.pop().unwrap() {
                             State::InFunction(n, fr) => {
-                                //println!("END fn {}", n);
                                 self.functions.insert(n, fr);
                             } 
                             State::InType(name, ty, is_union, fields) => {
@@ -102,8 +101,8 @@ impl super::DebugPool
                                 _ => todo!("{v:?} : {:?}", v.value()),
                                 }
                             }
-                            let at_lo = v.attr(::gimli::DW_AT_low_pc).map(|v| unwrap_addr(v));
-                            let at_hi = v.attr(::gimli::DW_AT_high_pc).map(|v| unwrap_addr(v));
+                            let at_lo = v.attr(::gimli::DW_AT_low_pc).map(|v| load_base + unwrap_addr(v));
+                            let at_hi = v.attr(::gimli::DW_AT_high_pc).map(|v| load_base + unwrap_addr(v));
                             let ranges = v.attr(::gimli::DW_AT_ranges).map(|v| v.value());
                             PcRanges {
                                 ranges: match (at_lo, at_hi, ranges)
@@ -121,10 +120,10 @@ impl super::DebugPool
                                     for v in r.map(|v| v.unwrap())
                                     {
                                         match v {
-                                        gimli::RawRngListEntry::BaseAddress { addr } => base_addr = addr,
+                                        gimli::RawRngListEntry::BaseAddress { addr } => base_addr = load_base + addr,
                                         gimli::RawRngListEntry::OffsetPair { begin, end } => rv.push(PcRange { start: base_addr + begin, end: base_addr + end }),
-                                        gimli::RawRngListEntry::StartEnd { begin, end } => rv.push(PcRange { start: begin, end }),
-                                        gimli::RawRngListEntry::StartLength { begin, length } => rv.push(PcRange { start: begin, end: begin + length }),
+                                        gimli::RawRngListEntry::StartEnd { begin, end } => rv.push(PcRange { start: load_base + begin, end: load_base + end }),
+                                        gimli::RawRngListEntry::StartLength { begin, length } => rv.push(PcRange { start: load_base + begin, end: load_base + begin + length }),
                                         _ => todo!("{:?}", v),
                                         }
                                     }
@@ -230,7 +229,7 @@ impl super::DebugPool
                                         {
                                         gimli::AttributeValue::Addr(v) => VariablePosition::Fixed(v),
                                         gimli::AttributeValue::Exprloc(expression) => {
-                                            VariablePosition::Expr(expression.0[..].to_owned())
+                                            VariablePosition::Expr(expression.0[..].to_owned(), unit.encoding())
                                         }
                                         gimli::AttributeValue::LocationListsRef(r) => {
                                             let expression = debug_info.locations(&unit, r)
@@ -239,7 +238,7 @@ impl super::DebugPool
                                                 .unwrap()
                                                 ;
                                             match expression {
-                                            Some(expression) => VariablePosition::Expr(expression.data.0[..].to_owned()),
+                                            Some(expression) => VariablePosition::Expr(expression.data.0[..].to_owned(), unit.encoding()),
                                             None => VariablePosition::OptimisedOut,
                                             }
                                         }
