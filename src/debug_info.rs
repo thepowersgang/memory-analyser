@@ -129,6 +129,7 @@ impl DebugPool {
                     };
                 let mut rv = crate::CpuState::stub();
                 for (r_name,rule) in i.registers() {
+                    println!("{:?}: {:?}", r_name, rule);
                     let v = match rule
                         {
                         ::gimli::RegisterRule::Undefined => 0,

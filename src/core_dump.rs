@@ -168,6 +168,7 @@ impl CoreDump {
                 let ofs = addr - r.v_start;
                 let chunk_idx = r.first_chunk + (ofs / self.chunk_size) as usize;
                 let chunk_ofs = (ofs % self.chunk_size) as usize;
+                println!("{:#x} -> {:#x}+{:#x} -> C{}+{:#x}", addr, r.v_start, ofs, chunk_idx, chunk_ofs);
                 self.with_chunk(chunk_idx, |chunk| {
                     let l = dst.len();
                     dst.copy_from_slice(&chunk[chunk_ofs..][..l]);
@@ -175,6 +176,7 @@ impl CoreDump {
                 return
             }
         }
+        panic!("Out-of-bounds read: {:#x}+{}", addr, dst.len());
     }
 
     fn with_chunk(&self, index: usize, cb: impl FnOnce(&[u8])) {
@@ -210,20 +212,24 @@ impl ChunkCache {
     }
     fn with_chunk(&self, ofs: u64, cb: impl FnOnce(&[u8])) {
         self.uses.set( self.uses.get() + 1 );
-        for e in &self.ents {
-            let mut e = e.borrow_mut();
-            if e.ofs == ofs {
-                e.last_use = self.uses.get();
-                cb(&e.data);
-                return ;
+        let mut e = 'a: {
+            for e in &self.ents {
+                let e = e.borrow_mut();
+                if e.ofs == ofs {
+                    break 'a e;
+                }
             }
-        }
-        let oldest = self.ents.iter().min_by_key(|v| v.borrow().last_use).unwrap();
-        let mut e = oldest.borrow_mut();
-        let mut fp = self.fp.borrow_mut();
-        use std::io::Seek;
-        fp.seek(::std::io::SeekFrom::Start(ofs)).expect("Seek fail");
-        raw::read_chunk(&mut *fp, &mut e.data).expect("Decompression failed, it passed earlier");
+            let oldest = self.ents.iter().min_by_key(|v| v.borrow().last_use).unwrap();
+            let mut e = oldest.borrow_mut();
+            let mut fp = self.fp.borrow_mut();
+            use std::io::Seek;
+            fp.seek(::std::io::SeekFrom::Start(ofs)).expect("Seek fail");
+            raw::read_chunk(&mut *fp, &mut e.data).expect("Decompression failed, it passed earlier");
+            e.ofs = ofs;
+            e
+        };
+        e.last_use = self.uses.get();
+        cb(&e.data);
     }
 }
 
