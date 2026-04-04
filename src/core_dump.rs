@@ -14,6 +14,7 @@ pub struct CoreDump {
 }
 struct ReferencedFile {
     base: u64,
+    file_base: u64,
     path: ::std::path::PathBuf,
 }
 struct MemoryRange {
@@ -38,6 +39,7 @@ impl CoreDump {
             modules: vec![
                 ReferencedFile {
                     base: 0,
+                    file_base: 0,
                     path: "/home/tpg/Projects/mrustc/bin/mrustc".into(),
                 }
             ],
@@ -69,13 +71,16 @@ impl CoreDump {
                 String::from_utf8(b).unwrap()
             };
             println!("{:?}: {:?}", hdr, name);
-            if name != "" {
+            if name != "" && name.starts_with("/") {
                 // Add the module
                 if let Some(v) = modules.iter_mut().find(|v| v.path == name) {
-                    v.base = u64::min(v.base, hdr.size);
+                    if hdr.v_start < v.base {
+                        v.base = hdr.v_start;
+                        v.file_base = hdr.file_ofs;
+                    }
                 }
                 else {
-                    modules.push(ReferencedFile { base: hdr.v_start, path: name.into() });
+                    modules.push(ReferencedFile { base: hdr.v_start, file_base: hdr.file_ofs, path: name.into() });
                 }
             }
             let this_chunk = hdr.v_start / header.chunk_size as u64;
@@ -147,8 +152,8 @@ impl CoreDump {
         })
     }
 
-    pub fn modules(&self) -> impl Iterator<Item=(::std::path::PathBuf,u64)> {
-        self.modules.iter().map(|v| (v.path.clone(), v.base))
+    pub fn modules(&self) -> impl Iterator<Item=(::std::path::PathBuf,u64,u64)> {
+        self.modules.iter().map(|v| (v.path.clone(), v.base, v.file_base))
     }
 
     pub fn get_thread(&self, index: usize) -> &crate::CpuState {
@@ -293,7 +298,7 @@ mod raw {
         }
         match ::std::io::Read::read(&mut stream, &mut [0]) {
         Ok(0) => {},
-        Ok(n) => panic!(""),
+        Ok(n) => panic!("Tailing data after compresed chunk: {}", n),
         Err(e) => {
             println!("@{}\n", stream.into_inner().seek(::std::io::SeekFrom::Current(0))?);
             return Err(e.into())

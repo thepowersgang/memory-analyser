@@ -24,9 +24,9 @@ fn main() {
         core_dump::CoreDump::new_stub()
     };
     let mut debug = debug_info::DebugPool::new();
-    for (module_path, base) in dump.modules()
+    for (module_path, base, file_base) in dump.modules()
     {
-        match debug.add_file(&module_path, base)
+        match debug.add_file(&module_path, base, file_base)
         {
         Ok(()) => {},
         Err(e) => panic!("Failed to load {:?}: {:?}", module_path, e),

@@ -77,11 +77,11 @@ impl super::DebugPool
                         while stack.len() > v.depth as usize {
                             match stack.pop().unwrap() {
                             State::InFunction(n, fr) => {
-                                println!("END fn {}", n);
+                                //println!("END fn {}", n);
                                 self.functions.insert(n, fr);
                             } 
                             State::InType(name, ty, is_union, fields) => {
-                                println!("END type {}", name);
+                                //println!("END type {}", name);
                                 self.types[ty.0] = Some(if is_union {
                                     Type::Union(CompositeType { name, fields })
                                 }else {
@@ -139,7 +139,7 @@ impl super::DebugPool
                         gimli::DW_TAG_subprogram => {
                             let name = get_name(&debug_info, &unit, v);
                             let full_name = get_scoped_name(&stack, "", name, v.offset);
-                            println!("fn {}: name={:?} @ {}", full_name, name, v.depth);
+                            //println!("fn {}: name={:?} @ {}", full_name, name, v.depth);
                             let pc_range = get_pc_range(v);
                             stack.push(State::InFunction(full_name, FunctionRecord {
                                 pc_range,
@@ -149,7 +149,7 @@ impl super::DebugPool
                         },
 
                         gimli::DW_TAG_typedef => {
-                            println!("> typedef: {:?}", get_name(&debug_info, &unit, v));
+                            //println!("> typedef: {:?}", get_name(&debug_info, &unit, v));
                             continue
                         },
                         gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => {
@@ -160,7 +160,7 @@ impl super::DebugPool
                             continue;
                         },
                         gimli::DW_TAG_enumeration_type => {
-                            println!("> enum: {:?}", get_name(&debug_info, &unit, v));
+                            //println!("> enum: {:?}", get_name(&debug_info, &unit, v));
                             continue;
                         },
                         gimli::DW_TAG_union_type => {
@@ -171,15 +171,15 @@ impl super::DebugPool
                             continue;
                         },
                         gimli::DW_TAG_const_type => {
-                            println!("> const_type: {:?}", get_name(&debug_info, &unit, v));
+                            //println!("> const_type: {:?}", get_name(&debug_info, &unit, v));
                             continue
                         },
                         gimli::DW_TAG_pointer_type => {
-                            println!("> pointer_type: {:?}", get_name(&debug_info, &unit, v));
+                            //println!("> pointer_type: {:?}", get_name(&debug_info, &unit, v));
                             continue
                         },
                         gimli::DW_TAG_reference_type => {
-                            println!("> reference type: {:?}", get_name(&debug_info, &unit, v));
+                            //println!("> reference type: {:?}", get_name(&debug_info, &unit, v));
                             continue
                         },
                         gimli::DW_TAG_rvalue_reference_type => {},
