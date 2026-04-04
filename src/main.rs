@@ -48,7 +48,7 @@ fn main() {
         Err(e) => panic!("Failed to load {:?}: {:?}", module_path, e),
         }
     }
-
+    
     let state_in_dump = dump.get_thread(0);
     println!("STATE: {}", state_in_dump);
     let state_main = debug.get_caller(&state_in_dump, &dump);

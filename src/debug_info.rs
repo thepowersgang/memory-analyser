@@ -127,6 +127,7 @@ impl DebugPool {
                     &gimli::CfaRule::RegisterAndOffset { register, offset } => get_register(state, &register).checked_add_signed(offset).unwrap(),
                     gimli::CfaRule::Expression(_unwind_expression) => todo!("CfaRule::Expression"),
                     };
+                println!("get_caller: cfa={:#x}", cfa);
                 let mut rv = crate::CpuState::stub();
                 for (r_name,rule) in i.registers() {
                     println!("{:?}: {:?}", r_name, rule);
@@ -175,7 +176,7 @@ impl DebugPool {
                 todo!("Unable to find variable def in {} at PC {:#x}", fcn_name, pc);
             }
         }
-        todo!("get_variable: {:?} - Failed to find function for PC={:#x}", name, pc)
+        panic!("get_variable: {:?} - Failed to find function for PC={:#x}", name, pc)
     }
     pub fn get_type(&self, ty: &TypeRef) -> &Type {
         self.types[ty.0].as_ref().expect("Type not populated")

@@ -70,7 +70,27 @@ impl CoreDump {
                 ::std::io::Read::read_exact(&mut fp, &mut b)?;
                 String::from_utf8(b).unwrap()
             };
-            println!("{:?}: {:?}", hdr, name);
+            let this_chunk = hdr.v_start / header.chunk_size as u64;
+            let this_end = hdr.v_start + hdr.size;
+            let next_chunk = this_end / header.chunk_size as u64;
+            if last_v_chunk != this_chunk {
+                // There's been a gap in chunks, so fix alignment
+                if last_end % header.chunk_size as u64 != 0 {
+                    n_chunks += 1;
+                }
+            }
+            println!("C{}/{} {:#x} + {:#x} from {:#x} flags={:#x}: {:?}", n_chunks, header.n_chunks, hdr.v_start, hdr.size, hdr.file_ofs, hdr._flags, name);
+            last_end = this_end;
+            last_v_chunk = next_chunk;
+
+            memory_ranges.push(MemoryRange {
+                _file_ofs: hdr.file_ofs,
+                first_chunk: n_chunks,
+                size: hdr.size,
+                v_start: hdr.v_start,
+            });
+            n_chunks += (next_chunk - this_chunk) as usize;
+
             if name != "" && name.starts_with("/") {
                 // Add the module
                 if let Some(v) = modules.iter_mut().find(|v| v.path == name) {
@@ -83,26 +103,12 @@ impl CoreDump {
                     modules.push(ReferencedFile { base: hdr.v_start, file_base: hdr.file_ofs, path: name.into() });
                 }
             }
-            let this_chunk = hdr.v_start / header.chunk_size as u64;
-            let this_end = hdr.v_start + hdr.size;
-            let next_chunk = this_end / header.chunk_size as u64;
-            if last_v_chunk != this_chunk {
-                // There's been a gap in chunks, so fix alignment
-                if last_end % header.chunk_size as u64 != 0 {
-                    n_chunks += 1;
-                }
-            }
-            last_end = this_end;
-            last_v_chunk = next_chunk;
-
-            memory_ranges.push(MemoryRange {
-                _file_ofs: hdr.file_ofs,
-                first_chunk: n_chunks,
-                size: hdr.size,
-                v_start: hdr.v_start,
-            });
-            n_chunks += (next_chunk - this_chunk) as usize;
         }
+        // There's been a gap in chunks, so fix alignment
+        if last_end % header.chunk_size as u64 != 0 {
+            n_chunks += 1;
+        }
+        assert!(n_chunks == header.n_chunks as usize);
         // Chunks (decompress, but don't save)
         let file_chunks = {
             let mut chunks = Vec::with_capacity(header.n_chunks as usize);
@@ -111,7 +117,7 @@ impl CoreDump {
                 use ::std::io::Seek;
                 chunks.push(fp.seek(::std::io::SeekFrom::Current(0))?);
                 println!("Chunk {} @ {}", _i, chunks.last().unwrap());
-                raw::read_chunk(&mut fp, &mut empty_chunk)?;
+                let _chunk_base = raw::read_chunk(&mut fp, &mut empty_chunk)?;
             }
             chunks
         };
@@ -161,13 +167,13 @@ impl CoreDump {
     }
 
     pub fn read_bytes(&self, addr: u64, dst: &mut [u8]) {
-        assert!(dst.len() < 16);
+        assert!(dst.len() <= 16);
         for r in &self.memory_ranges {
             if r.v_start <= addr && addr < r.v_start + r.size {
                 // Correct range, now get the chunk
                 let ofs = addr - r.v_start;
                 let chunk_idx = r.first_chunk + (ofs / self.chunk_size) as usize;
-                let chunk_ofs = (ofs % self.chunk_size) as usize;
+                let chunk_ofs = (addr % self.chunk_size) as usize;
                 println!("{:#x} -> {:#x}+{:#x} -> C{}+{:#x}", addr, r.v_start, ofs, chunk_idx, chunk_ofs);
                 self.with_chunk(chunk_idx, |chunk| {
                     let l = dst.len();
@@ -224,7 +230,7 @@ impl ChunkCache {
             let mut fp = self.fp.borrow_mut();
             use std::io::Seek;
             fp.seek(::std::io::SeekFrom::Start(ofs)).expect("Seek fail");
-            raw::read_chunk(&mut *fp, &mut e.data).expect("Decompression failed, it passed earlier");
+            let _chunk_base = raw::read_chunk(&mut *fp, &mut e.data).expect("Decompression failed, it passed earlier");
             e.ofs = ofs;
             e
         };
@@ -293,7 +299,13 @@ mod raw {
         }
     }
 
-    pub fn read_chunk(fp: &mut (impl ::std::io::BufRead + ::std::io::Seek), dst: &mut Vec<u8>) -> ::std::io::Result<()> {
+    pub fn read_chunk(fp: &mut (impl ::std::io::BufRead + ::std::io::Seek), dst: &mut Vec<u8>) -> ::std::io::Result<u64> {
+        let addr = {
+            let mut buf = [0; 8];
+            fp.read_exact(&mut buf)?;
+            u64::from_ne_bytes(buf)
+        };
+        println!("read_chunk: addr={:#x}", addr);
         let mut stream = ::flate2::bufread::ZlibDecoder::new(fp);
         match ::std::io::Read::read_exact(&mut stream, dst) {
         Ok(_) => {},
@@ -310,7 +322,7 @@ mod raw {
             return Err(e.into())
         },
         }
-        Ok(())
+        Ok(addr)
     }
 
     fn read_bytes<const N: usize>(fp: &mut impl ::std::io::Read) -> ::std::io::Result<[u8; N]> {
