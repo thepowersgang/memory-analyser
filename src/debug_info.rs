@@ -179,9 +179,13 @@ impl DebugPool {
                 r = match r.expect("Failure evaluating")
                 {
                 E::Complete => {
-                    //let mut b = [0; 16];
                     let r= e.result();
-                    todo!("complete: get result from {:?}", r);
+                    assert!(r.len() == 1, "Multiple (or zero) pieces? {:?}", r);
+                    match r[0].location
+                    {
+                    gimli::Location::Address { address } => break address,
+                    a @ _ => todo!("Location: {:?}", a),
+                    }
                     },
                 E::RequiresMemory { address, size, space, base_type } => todo!("RequiresMemory"),
                 E::RequiresRegister { register, base_type }
@@ -223,8 +227,12 @@ impl DebugPool {
         let p = self.evaluate_position(state, memory, &r.position, fcn_rec);
         return (p, var.ty);
     }
+    #[track_caller]
     pub fn get_type(&self, ty: &TypeRef) -> &Type {
-        self.types[ty.0].as_ref().expect("Type not populated")
+        match self.types[ty.0] {
+        Some(ref v) => v,
+        None => panic!("Type not populated: {:?}", ty)
+        }
     }
 
     fn dwarf_type_ref(&mut self, unit_index: usize, ofs: ::gimli::UnitOffset) -> TypeRef {
