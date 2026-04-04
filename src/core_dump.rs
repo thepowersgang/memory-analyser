@@ -174,7 +174,7 @@ impl CoreDump {
                 let ofs = addr - r.v_start;
                 let chunk_idx = r.first_chunk + (ofs / self.chunk_size) as usize;
                 let chunk_ofs = (addr % self.chunk_size) as usize;
-                println!("{:#x} -> {:#x}+{:#x} -> C{}+{:#x}", addr, r.v_start, ofs, chunk_idx, chunk_ofs);
+                //println!("read_bytes: {:#x} -> {:#x}+{:#x} -> C{}+{:#x}", addr, r.v_start, ofs, chunk_idx, chunk_ofs);
                 self.with_chunk(chunk_idx, |chunk| {
                     let l = dst.len();
                     dst.copy_from_slice(&chunk[chunk_ofs..][..l]);

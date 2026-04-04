@@ -1,6 +1,7 @@
 mod core_dump;
 mod debug_info;
 
+#[derive(Clone)]
 struct CpuState {
     // AMD64:
     pc: u64,
@@ -55,15 +56,16 @@ fn main() {
     println!("STATE: {}", state_main);
 
     let (addr, ty) = debug.get_variable(&state_main, &dump, "crate");
-    visit_type(&debug, &dump, &debug.get_type(&ty), addr);
+    visit_type(0, &debug, &dump, &debug.get_type(&ty), addr);
 }
 
-fn visit_type(debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64) {
+fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64) {
+    println!("{:w$}{ty} @ {addr:#x}", "", ty=debug.fmt_type(ty), w=depth);
     match ty {
-    debug_info::Type::Alias(ty) => visit_type(debug, dump, debug.get_type(ty), addr),
+    debug_info::Type::Alias(ty) => visit_type(depth+1, debug, dump, debug.get_type(ty), addr),
     debug_info::Type::Struct(composite_type) => {
         for f in composite_type.iter_fields() {
-            visit_type(debug, dump, &debug.get_type(&f.ty), addr + f.offset);
+            visit_type(depth+1, debug, dump, &debug.get_type(&f.ty), addr + f.offset);
         }
     },
     debug_info::Type::Union(composite_type) => {
@@ -72,7 +74,8 @@ fn visit_type(debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &de
     debug_info::Type::Primtive(_) => {},
     debug_info::Type::Pointer(dst_ty) => {
         let addr = dump.read_ptr(addr);
-        visit_type(debug, dump, &debug.get_type(dst_ty), addr);
+        println!("{:?} {:#x}", debug.get_type(dst_ty), addr);
+        visit_type(depth+1, debug, dump, &debug.get_type(dst_ty), addr);
     },
     }
 }

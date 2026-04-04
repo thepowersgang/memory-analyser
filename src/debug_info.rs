@@ -104,7 +104,7 @@ impl DebugPool {
 
     fn get_unwind<'ctxt>(&self, ctx: &'ctxt mut ::gimli::UnwindContext<usize>, address: u64) -> Option<&'ctxt ::gimli::UnwindTableRow<usize>> {
         for (base, eh_base, info) in &self.backtrace_data {
-            println!("get_caller: {:#x} + {:#x}", base, eh_base);
+            //println!("get_unwind: {:#x} + {:#x}", base, eh_base);
             let bases = ::gimli::BaseAddresses::default()
                 .set_text(*base)
                 .set_eh_frame(*base + *eh_base)
@@ -141,9 +141,8 @@ impl DebugPool {
         };
         let cfa = Self::get_cfa(state, i.cfa());
         println!("get_caller: cfa={:#x}", cfa);
-        let mut rv = crate::CpuState::stub();
+        let mut rv = state.clone();
         for (r_name,rule) in i.registers() {
-            println!("{:?}: {:?}", r_name, rule);
             let v = match rule
                 {
                 ::gimli::RegisterRule::Undefined => 0,
@@ -156,6 +155,7 @@ impl DebugPool {
                 ::gimli::RegisterRule::Architectural => todo!("RegisterRule::Architectural"),
                 ::gimli::RegisterRule::Constant(v) => *v,
                 };
+            println!("{:?}: {:?} = {:#x}", r_name, rule, v);
             match r_name.0 {
             i @ 0 .. 16 => rv.gprs[i as usize] = v,
             16 => rv.pc = v,
@@ -172,7 +172,11 @@ impl DebugPool {
         VariablePosition::Fixed(p) => *p,
         VariablePosition::Expr(items, encoding) => {
             let r = ::gimli::EndianReader::new(items.as_slice(), ::gimli::NativeEndian);
-            let mut e = ::gimli::read::Expression(r).evaluation(*encoding);
+            let e = ::gimli::read::Expression(r);
+            print!("EVAL: ");
+            e.operations(*encoding).for_each(|v| print!(">> {:?}", v.unwrap()));
+            println!("");
+            let mut e = e.evaluation(*encoding);
             let mut r = e.evaluate();
             loop {
                 use gimli::EvaluationResult as E;
@@ -181,6 +185,7 @@ impl DebugPool {
                 E::Complete => {
                     let r= e.result();
                     assert!(r.len() == 1, "Multiple (or zero) pieces? {:?}", r);
+                    println!(" = {:?}", r);
                     match r[0].location
                     {
                     gimli::Location::Address { address } => break address,
@@ -198,6 +203,7 @@ impl DebugPool {
                         todo!("get_variable: no backtrace for PC={:#x} to get CFA", state.get_pc());
                     };
                     let cfa = Self::get_cfa(state, i.cfa());
+                    println!("cfa={:#x}", cfa);
                     e.resume_with_call_frame_cfa(cfa)
                 },
                 E::RequiresAtLocation(die_reference) => todo!("RequiresAtLocation"),
@@ -244,6 +250,38 @@ impl DebugPool {
                 self.types.push(None);
                 rv
             })
+    }
+
+    fn fmt_type_ref_inner(&self, f: &mut std::fmt::Formatter<'_>, ty: &TypeRef) -> ::std::fmt::Result {
+        match self.types[ty.0] {
+        Some(ref ty) => self.fmt_type_inner(f, ty),
+        None => write!(f, "?#{}", ty.0)
+        }
+    }
+    fn fmt_type_inner(&self, f: &mut std::fmt::Formatter<'_>, ty: &Type) -> ::std::fmt::Result {
+        match ty {
+        Type::Struct(composite_type) => f.write_str(&composite_type.name),
+        Type::Union(composite_type) => f.write_str(&composite_type.name),
+        Type::Primtive(primitive_type) => write!(f, "prim{}", primitive_type.bits),
+        Type::Pointer(type_ref) => {
+            f.write_str("*")?;
+            self.fmt_type_ref_inner(f, type_ref)
+        },
+        Type::Alias(type_ref) => {
+            // TODO: have the name save too?
+            f.write_str("=")?;
+            self.fmt_type_ref_inner(f, type_ref)
+        }
+        }
+    }
+    pub fn fmt_type<'a>(&'a self, ty: &'a Type) -> impl ::std::fmt::Display + 'a {
+        struct F<'a>(&'a DebugPool, &'a Type);
+        impl<'a> ::std::fmt::Display for F<'a> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt_type_inner(f, self.1)
+            }
+        }
+        F(self, ty)
     }
 }
 
@@ -316,6 +354,7 @@ enum VariablePosition {
 #[derive(Debug)]
 pub struct TypeRef(usize);
 
+#[derive(Debug)]
 pub enum Type {
     Struct(CompositeType),
     Union(CompositeType),
@@ -323,9 +362,11 @@ pub enum Type {
     Pointer(TypeRef),
     Alias(TypeRef),
 }
+#[derive(Debug)]
 pub struct PrimitiveType {
     bits: u32,
 }
+#[derive(Debug)]
 pub struct CompositeType {
     name: String,
     fields: Vec<CompositeField>,
