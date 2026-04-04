@@ -237,9 +237,7 @@ impl DebugPool {
     pub fn get_type(&self, ty: &TypeRef) -> &Type {
         match self.types[ty.0] {
         Some(ref v) => v,
-        None => {
-            panic!("Type not populated: {:?} = {:?}", ty, self.type_lookup.iter().find(|(k,v)| v.0 == ty.0))
-        }
+        None => panic!("Type not populated: {:?} = {:?}", ty, self.type_lookup.iter().find(|(_,v)| v.0 == ty.0)),
         }
     }
 
@@ -283,6 +281,15 @@ impl DebugPool {
             }
         }
         F(self, ty)
+    }
+    pub fn fmt_type_ref<'a>(&'a self, ty: &TypeRef) -> impl ::std::fmt::Display + 'a {
+        struct F<'a>(&'a DebugPool, TypeRef);
+        impl<'a> ::std::fmt::Display for F<'a> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt_type_ref_inner(f, &self.1)
+            }
+        }
+        F(self, *ty)
     }
 }
 
