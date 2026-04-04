@@ -138,10 +138,18 @@ impl super::DebugPool
                         gimli::DW_TAG_subprogram => {
                             let name = get_name(&debug_info, &unit, v);
                             let full_name = get_scoped_name(&stack, "", name, v.offset);
+                            let frame_base = v.attr_value(::gimli::DW_AT_frame_base).map(|fb| {
+                                match fb
+                                {
+                                ::gimli::AttributeValue::Exprloc(expr) => VariablePosition::Expr(expr.0.to_vec(), unit.encoding()),
+                                _ => todo!("Frame base: {:?}", fb),
+                                }
+                            }).unwrap_or(VariablePosition::OptimisedOut);
                             //println!("fn {}: name={:?} @ {}", full_name, name, v.depth);
                             let pc_range = get_pc_range(v);
                             stack.push(State::InFunction(full_name, FunctionRecord {
                                 pc_range,
+                                frame_base,
                                 variables: Default::default(),
                             }));
                             continue;

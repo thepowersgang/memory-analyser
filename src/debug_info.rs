@@ -102,9 +102,7 @@ impl DebugPool {
         Ok( () )
     }
 
-    pub fn get_caller(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump) -> crate::CpuState {
-        println!("get_caller: {:#x}", state.get_pc());
-        let mut context = ::gimli::UnwindContext::new();
+    fn get_unwind<'ctxt>(&self, ctx: &'ctxt mut ::gimli::UnwindContext<usize>, address: u64) -> Option<&'ctxt ::gimli::UnwindTableRow<usize>> {
         for (base, eh_base, info) in &self.backtrace_data {
             println!("get_caller: {:#x} + {:#x}", base, eh_base);
             let bases = ::gimli::BaseAddresses::default()
@@ -115,46 +113,99 @@ impl DebugPool {
             match match info 
                 {
                 BacktraceType::Debug(debug_frame) =>
-                    debug_frame.unwind_info_for_address(&bases, &mut context, state.get_pc(), ::gimli::DebugFrame::cie_from_offset),
+                    debug_frame.unwind_info_for_address(&bases, ctx, address, ::gimli::DebugFrame::cie_from_offset),
                 BacktraceType::Eh(eh_frame) => 
-                    eh_frame.unwind_info_for_address(&bases, &mut context, state.get_pc(), ::gimli::EhFrame::cie_from_offset),
+                    eh_frame.unwind_info_for_address(&bases, ctx, address, ::gimli::EhFrame::cie_from_offset),
                 }
             {
-            Ok(i) => {
-                let cfa = match i.cfa()
-                    {
-                    &gimli::CfaRule::RegisterAndOffset { register, offset } => get_register(state, &register).checked_add_signed(offset).unwrap(),
-                    gimli::CfaRule::Expression(_unwind_expression) => todo!("CfaRule::Expression"),
-                    };
-                println!("get_caller: cfa={:#x}", cfa);
-                let mut rv = crate::CpuState::stub();
-                for (r_name,rule) in i.registers() {
-                    println!("{:?}: {:?}", r_name, rule);
-                    let v = match rule
-                        {
-                        ::gimli::RegisterRule::Undefined => 0,
-                        ::gimli::RegisterRule::SameValue => state.gprs[r_name.0 as usize],
-                        ::gimli::RegisterRule::Offset(cfa_ofs) => memory.read_ptr(cfa.wrapping_add_signed(*cfa_ofs)),
-                        ::gimli::RegisterRule::ValOffset(cfa_ofs) => cfa.wrapping_add_signed(*cfa_ofs),
-                        ::gimli::RegisterRule::Register(register) => get_register(state, register),
-                        ::gimli::RegisterRule::Expression(_unwind_expression) => todo!("RegisterRule::Expression"),
-                        ::gimli::RegisterRule::ValExpression(_unwind_expression) => todo!("RegisterRule::ValExpression"),
-                        ::gimli::RegisterRule::Architectural => todo!("RegisterRule::Architectural"),
-                        ::gimli::RegisterRule::Constant(v) => *v,
-                        };
-                    match r_name.0 {
-                    i @ 0 .. 16 => rv.gprs[i as usize] = v,
-                    16 => rv.pc = v,
-                    _ => {},
-                    }
-                }
-                return rv;
-            },
+            // HACK: Launder the pointer, avoiding a double-borrow issue with `ctx`
+            Ok(i) => return Some(unsafe { &*(i as *const _)}),
             Err(gimli::Error::NoUnwindInfoForAddress) => continue,
             Err(e) => todo!("Unwind error: {:?}", e),
             }
         }
-        todo!("get_caller: no entry")
+        return None;
+    }
+    fn get_cfa(state: &crate::CpuState, cfa: &gimli::CfaRule<usize>) -> u64 {
+        match cfa
+        {
+        &gimli::CfaRule::RegisterAndOffset { register, offset } => get_register(state, &register).checked_add_signed(offset).unwrap(),
+        &gimli::CfaRule::Expression(_unwind_expression) => todo!("CfaRule::Expression"),
+        }
+    }
+    pub fn get_caller(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump) -> crate::CpuState {
+        println!("get_caller: {:#x}", state.get_pc());
+        let mut context = ::gimli::UnwindContext::new();
+        let Some(i) = self.get_unwind(&mut context, state.get_pc()) else {
+            todo!("get_caller: no entry for PC={:#x}", state.get_pc());
+        };
+        let cfa = Self::get_cfa(state, i.cfa());
+        println!("get_caller: cfa={:#x}", cfa);
+        let mut rv = crate::CpuState::stub();
+        for (r_name,rule) in i.registers() {
+            println!("{:?}: {:?}", r_name, rule);
+            let v = match rule
+                {
+                ::gimli::RegisterRule::Undefined => 0,
+                ::gimli::RegisterRule::SameValue => state.gprs[r_name.0 as usize],
+                ::gimli::RegisterRule::Offset(cfa_ofs) => memory.read_ptr(cfa.wrapping_add_signed(*cfa_ofs)),
+                ::gimli::RegisterRule::ValOffset(cfa_ofs) => cfa.wrapping_add_signed(*cfa_ofs),
+                ::gimli::RegisterRule::Register(register) => get_register(state, register),
+                ::gimli::RegisterRule::Expression(_unwind_expression) => todo!("RegisterRule::Expression"),
+                ::gimli::RegisterRule::ValExpression(_unwind_expression) => todo!("RegisterRule::ValExpression"),
+                ::gimli::RegisterRule::Architectural => todo!("RegisterRule::Architectural"),
+                ::gimli::RegisterRule::Constant(v) => *v,
+                };
+            match r_name.0 {
+            i @ 0 .. 16 => rv.gprs[i as usize] = v,
+            16 => rv.pc = v,
+            _ => {},
+            }
+        }
+        return rv;
+    }
+
+    
+    fn evaluate_position(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump, pos: &VariablePosition, fcn_rec: &FunctionRecord) -> u64 {
+        match pos {
+        VariablePosition::OptimisedOut => todo!("Optimsed out variable"),
+        VariablePosition::Fixed(p) => *p,
+        VariablePosition::Expr(items, encoding) => {
+            let r = ::gimli::EndianReader::new(items.as_slice(), ::gimli::NativeEndian);
+            let mut e = ::gimli::read::Expression(r).evaluation(*encoding);
+            let mut r = e.evaluate();
+            loop {
+                use gimli::EvaluationResult as E;
+                r = match r.expect("Failure evaluating")
+                {
+                E::Complete => {
+                    //let mut b = [0; 16];
+                    let r= e.result();
+                    todo!("complete: get result from {:?}", r);
+                    },
+                E::RequiresMemory { address, size, space, base_type } => todo!("RequiresMemory"),
+                E::RequiresRegister { register, base_type }
+                    => e.resume_with_register(::gimli::Value::U64(get_register(state, &register))),
+                E::RequiresFrameBase => e.resume_with_frame_base(self.evaluate_position(state, memory, &fcn_rec.frame_base, fcn_rec)),
+                E::RequiresTls(_) => todo!("RequiresTls"),
+                E::RequiresCallFrameCfa => {
+                    let mut context = ::gimli::UnwindContext::new();
+                    let Some(i) = self.get_unwind(&mut context, state.get_pc()) else {
+                        todo!("get_variable: no backtrace for PC={:#x} to get CFA", state.get_pc());
+                    };
+                    let cfa = Self::get_cfa(state, i.cfa());
+                    e.resume_with_call_frame_cfa(cfa)
+                },
+                E::RequiresAtLocation(die_reference) => todo!("RequiresAtLocation"),
+                E::RequiresEntryValue(expression) => todo!(),
+                E::RequiresParameterRef(unit_offset) => todo!(),
+                E::RequiresRelocatedAddress(_) => todo!(),
+                E::RequiresIndexedAddress { index, relocate } => todo!(),
+                E::RequiresBaseType(unit_offset) => todo!("RequiresBaseType"),
+                };
+            }
+        },
+        }
     }
 
     // Get the storage address of a variable
@@ -169,38 +220,7 @@ impl DebugPool {
         let Some(r) = var.ranges.iter().find(|r| r.pc_range.contains(pc)) else {
             panic!("Unable to find variable def in {} at PC {:#x}", fcn_name, pc);
         };
-        let p = match &r.position {
-            VariablePosition::OptimisedOut => todo!("Optimsed out variable"),
-            VariablePosition::Fixed(p) => *p,
-            VariablePosition::Expr(items, encoding) => {
-                let r = ::gimli::EndianReader::new(items.as_slice(), ::gimli::NativeEndian);
-                let mut e = ::gimli::read::Expression(r).evaluation(*encoding);
-                let mut r = e.evaluate();
-                loop {
-                    use gimli::EvaluationResult as E;
-                    r = match r.expect("Failure evaluating")
-                    {
-                    E::Complete => {
-                        //let mut b = [0; 16];
-                        let r= e.result();
-                        todo!("complete: get result from {:?}", r);
-                        },
-                    E::RequiresMemory { address, size, space, base_type } => todo!("RequiresMemory"),
-                    E::RequiresRegister { register, base_type }
-                        => e.resume_with_register(::gimli::Value::U64(get_register(state, &register))),
-                    E::RequiresFrameBase => todo!("RequiresFrameBase"),
-                    E::RequiresTls(_) => todo!(),
-                    E::RequiresCallFrameCfa => todo!(),
-                    E::RequiresAtLocation(die_reference) => todo!(),
-                    E::RequiresEntryValue(expression) => todo!(),
-                    E::RequiresParameterRef(unit_offset) => todo!(),
-                    E::RequiresRelocatedAddress(_) => todo!(),
-                    E::RequiresIndexedAddress { index, relocate } => todo!(),
-                    E::RequiresBaseType(unit_offset) => todo!(),
-                    };
-                }
-            },
-            };
+        let p = self.evaluate_position(state, memory, &r.position, fcn_rec);
         return (p, var.ty);
     }
     pub fn get_type(&self, ty: &TypeRef) -> &Type {
@@ -261,6 +281,7 @@ impl PcRanges {
 struct FunctionRecord {
     /// Range of PC values covered by this function
     pc_range: PcRanges,
+    frame_base: VariablePosition,
     variables: ::std::collections::HashMap<String,VariableRecord>,
 }
 #[derive(Debug)]
