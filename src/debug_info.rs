@@ -364,6 +364,7 @@ pub enum Type {
 }
 #[derive(Debug)]
 pub struct PrimitiveType {
+    name: String,
     bits: u32,
 }
 #[derive(Debug)]

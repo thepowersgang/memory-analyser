@@ -64,6 +64,15 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
     match ty {
     debug_info::Type::Alias(ty) => visit_type(depth+1, debug, dump, debug.get_type(ty), addr),
     debug_info::Type::Struct(composite_type) => {
+        // TODO: Special case some structs
+        if composite_type.name() == "::std::__cxx11::struct basic_string<char, std::char_traits<char>, std::allocator<char> >" {
+            // Get string data, and check for duplicates?
+            return ;
+        }
+        if composite_type.name().starts_with(":std::struct vector<") {
+            // Get the item count, and seek through
+            return ;
+        }
         for f in composite_type.iter_fields() {
             visit_type(depth+1, debug, dump, &debug.get_type(&f.ty), addr + f.offset);
         }
@@ -74,8 +83,12 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
     debug_info::Type::Primtive(_) => {},
     debug_info::Type::Pointer(dst_ty) => {
         let addr = dump.read_ptr(addr);
-        println!("{:?} {:#x}", debug.get_type(dst_ty), addr);
-        visit_type(depth+1, debug, dump, &debug.get_type(dst_ty), addr);
+        println!("{:0$}->{:#x}", depth, addr);
+        if addr != 0 {
+            if false {
+                visit_type(depth+1, debug, dump, &debug.get_type(dst_ty), addr);
+            }
+        }
     },
     }
 }

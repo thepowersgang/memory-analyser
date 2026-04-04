@@ -175,6 +175,19 @@ impl super::DebugPool
                             continue;
                         },
 
+                        gimli::DW_TAG_base_type => {
+                            let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
+                            //let encoding = v.attr_value(::gimli::DW_AT_encoding);
+                            let size_bits = v.attr_value(::gimli::DW_AT_byte_size)
+                                .map(|v| v.udata_value().unwrap() * 8)
+                                .or(v.attr_value(::gimli::DW_AT_bit_size).map(|v| v.udata_value().unwrap()));
+                            println!("> {ty_ref:?} base type: {:?}", get_name(&debug_info, &unit, v));
+                            self.types[ty_ref.0] = Some(Type::Primtive(super::PrimitiveType {
+                                bits: size_bits.expect("No size?") as u32,
+                                name: get_scoped_name(&stack, "", get_name(&debug_info, &unit, v), v.offset),
+                            }));
+                            continue
+                        },
                         gimli::DW_TAG_typedef => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let target_ty = self.get_typeref_from_attr(unit_index, v);
