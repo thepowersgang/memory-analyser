@@ -379,6 +379,7 @@ pub struct PrimitiveType {
 #[derive(Debug)]
 pub struct CompositeType {
     name: String,
+    size: usize,
     fields: Vec<CompositeField>,
     parents: Vec<(u64, TypeRef)>,
 }

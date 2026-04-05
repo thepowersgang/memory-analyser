@@ -79,6 +79,49 @@ fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u
     }
 }
 
+struct StdVector {
+    inner_ty: debug_info::TypeRef,
+    begin: u64,
+    end: u64,
+    alloc_end: u64,
+}
+fn get_std_vector(debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, composite_type: &debug_info::CompositeType, addr: u64) -> StdVector {
+    let inner_ty = {
+        let (_, ty) = composite_type.parents().next().unwrap();
+        let ty = debug.get_type(ty);    // vector_base
+        let debug_info::Type::Struct(ct) = ty else { panic!("Expected struct, got {:?}", ty); };
+        //println!("> {}", ct.name());
+        let f = ct.iter_fields().next().unwrap();   // _M_impl
+        let ty = debug.get_type(&f.ty);
+        let debug_info::Type::Struct(ct) = ty else { panic!("Expected struct, got {:?}", ty); };
+        //println!("> {}", ct.name());
+        let (_, ty) = ct.parents().nth(1).unwrap();
+        let ty = debug.get_type(ty);    // _Vector_impl_data
+        let debug_info::Type::Struct(ct) = ty else { panic!("Expected struct, got {:?}", ty); };
+        //println!("> {}", ct.name());
+        let f = ct.iter_fields().next().unwrap();   // _M_start
+        //println!("> {}: {}", f.name, debug.fmt_type_ref(&f.ty));
+        let mut ty = debug.get_type(&f.ty);
+        let ty = loop {
+            ty = match ty {
+            debug_info::Type::Alias(ty) => debug.get_type(ty),
+            _ => break ty,
+            };
+        };
+        let debug_info::Type::Pointer(ty) = ty else { panic!("Expected pointer, got {:?}", ty); };
+        *ty
+        };
+    let m_start = dump.read_ptr(addr + 0);
+    let m_finish = dump.read_ptr(addr + 8);
+    let m_end_of_storage = dump.read_ptr(addr + 16);
+    StdVector {
+        inner_ty,
+        begin: m_start,
+        end: m_finish,
+        alloc_end: m_end_of_storage,
+    }
+}
+
 fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64) {
     println!("{:w$}{ty} @ {addr:#x}", "", ty=debug.fmt_type(ty), w=depth);
     match ty {
@@ -90,46 +133,21 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             return ;
         }
         if composite_type.name().starts_with("::std::struct vector<") {
-            //print!("VECTOR: "); dump_type_fields(debug, ty, 0); println!("");
-            let inner_type = {
-                let (_, ty) = composite_type.parents().next().unwrap();
-                let ty = debug.get_type(ty);    // vector_base
-                let debug_info::Type::Struct(ct) = ty else { panic!("Expected struct, got {:?}", ty); };
-                //println!("> {}", ct.name());
-                let f = ct.iter_fields().next().unwrap();   // _M_impl
-                let ty = debug.get_type(&f.ty);
-                let debug_info::Type::Struct(ct) = ty else { panic!("Expected struct, got {:?}", ty); };
-                //println!("> {}", ct.name());
-                let (_, ty) = ct.parents().nth(1).unwrap();
-                let ty = debug.get_type(ty);    // _Vector_impl_data
-                let debug_info::Type::Struct(ct) = ty else { panic!("Expected struct, got {:?}", ty); };
-                //println!("> {}", ct.name());
-                let f = ct.iter_fields().next().unwrap();   // _M_start
-                //println!("> {}: {}", f.name, debug.fmt_type_ref(&f.ty));
-                let mut ty = debug.get_type(&f.ty);
-                let ty = loop {
-                    ty = match ty {
-                    debug_info::Type::Alias(ty) => debug.get_type(ty),
-                    _ => break ty,
-                    };
-                };
-                let debug_info::Type::Pointer(ty) = ty else { panic!("Expected pointer, got {:?}", ty); };
-                ty
-                };
-            let m_start = dump.read_ptr(addr + 0);
-            let m_finish = dump.read_ptr(addr + 8);
-            let m_end_of_storage = dump.read_ptr(addr + 16);
-            println!("VECTOR: {} {:#x}--{:#x}--{:#x}: `{}`", composite_type.name(), m_start, m_finish, m_end_of_storage, debug.fmt_type_ref(inner_type));
+            let v = get_std_vector(debug, dump, composite_type, addr);
+            println!("VECTOR: {} {:#x}--{:#x}--{:#x}: `{}`", composite_type.name(), v.begin, v.end, v.alloc_end, debug.fmt_type_ref(&v.inner_ty));
             //for a in (m_start .. m_finish).step_by(inner_size) {
             //    visit_type(depth+1, debug, dump, debug.get_type(ty), addr),
             //}
             return ;
         }
         if composite_type.name().starts_with("::std::struct map<") {
-            // TODO: Decode and iterate the map
-            print!("MAP: "); dump_type_fields(debug, ty, 0); println!("");
+            println!("MAP: @{:#x}: TODO", addr);
+            if false {
+                print!("MAP: "); dump_type_fields(debug, ty, 0); println!("");
+            }
             //todo!("map");
             // harder :( - Don't have an easy way of getting the inner type. No contained type has it
+            // - Need to parse the type name, and find a matching inner type
 
             // header:
             //_M_color: @0x8: ::std::enum _Rb_tree_color,
@@ -138,6 +156,20 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             //_M_right: @0x20: *::std::struct _Rb_tree_node_base,
             // meta:
             //_M_node_count: @0x28: prim64,
+            return ;
+        }
+        if composite_type.name().starts_with("::std::struct unordered_map<") {
+            println!("UNORDERED MAP: @{:#x}: TODO", addr);
+            //print!("UNORDERED MAP: "); dump_type_fields(debug, ty, 0); println!("");
+            //todo!("unordered_map");
+            // TODO: Same problem as `std::map`, there's no contained type in here
+            // _M_buckets: @0x0: *=*=::std::__detail::struct _Hash_node_base,
+            // _M_bucket_count: @0x8: prim64,
+            // _M_before_begin._M_nxt: @0x10: *::std::__detail::struct _Hash_node_base,
+            // _M_element_count: @0x18: prim64,
+            // _M_rehash_policy._M_max_load_factor: @0x20: prim32,
+            // _M_rehash_policy._M_next_resize: @0x28: prim64,
+            // _M_single_bucket: @0x30: *=::std::__detail::struct _Hash_node_base,
             return ;
         }
         for (ofs,ty) in composite_type.parents() {
@@ -154,7 +186,7 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
     debug_info::Type::Primtive(_) => {},
     debug_info::Type::Pointer(dst_ty) => {
         let addr = dump.read_ptr(addr);
-        println!("{:0$}->{:#x}", depth, addr);
+        println!("{:depth$}->{:#x}", "", addr);
         if addr != 0 {
             if false {
                 visit_type(depth+1, debug, dump, &debug.get_type(dst_ty), addr);

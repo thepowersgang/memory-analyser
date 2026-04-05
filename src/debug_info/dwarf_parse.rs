@@ -203,9 +203,10 @@ impl super::DebugPool
                         },
                         gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
+                            let size = v.attr_value(::gimli::DW_AT_byte_size).map(|v| v.udata_value().expect("not UData")).unwrap_or(0);
                             let name = get_name(&debug_info, &unit, v);
                             let name = get_scoped_name(&stack, "struct ", name, v.offset);
-                            stack.push(State::InType(CompositeType { name, fields: Vec::new(), parents: Vec::new() }, ty_ref, false, ));
+                            stack.push(State::InType(CompositeType { name, size: size as usize, fields: Vec::new(), parents: Vec::new() }, ty_ref, false, ));
                             continue;
                         },
                         gimli::DW_TAG_enumeration_type => {
@@ -218,9 +219,10 @@ impl super::DebugPool
                         },
                         gimli::DW_TAG_union_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
+                            let size = v.attr_value(::gimli::DW_AT_byte_size).unwrap().udata_value().expect("not UData");
                             let name = get_name(&debug_info, &unit, v);
                             let name = get_scoped_name(&stack, "struct ", name, v.offset);
-                            stack.push(State::InType(CompositeType { name, fields: Vec::new(), parents: Vec::new() }, ty_ref, true, ));
+                            stack.push(State::InType(CompositeType { name, size: size as usize, fields: Vec::new(), parents: Vec::new() }, ty_ref, true, ));
                             continue;
                         },
                         gimli::DW_TAG_const_type => {
