@@ -353,7 +353,7 @@ impl super::DebugPool
                                 let inner_ofs = v.attr_value(::gimli::DW_AT_data_member_location)
                                     .expect("no data_member_location");
                                 let inner_ofs = match inner_ofs {
-                                    gimli::AttributeValue::Exprloc(e) => {
+                                    gimli::AttributeValue::Exprloc(_) => {
                                         // Ignore?
                                         continue ;
                                     },
@@ -399,11 +399,11 @@ impl super::DebugPool
                     }
                 }
             },
-            gimli::UnitType::Type { type_signature, type_offset } => todo!(),
-            gimli::UnitType::Partial => todo!(),
-            gimli::UnitType::Skeleton(dwo_id) => todo!(),
-            gimli::UnitType::SplitCompilation(dwo_id) => todo!(),
-            gimli::UnitType::SplitType { type_signature, type_offset } => todo!(),
+            gimli::UnitType::Type { .. } => todo!("gimli::UnitType::Type"),
+            gimli::UnitType::Partial => todo!("gimli::UnitType::Partial"),
+            gimli::UnitType::Skeleton(..) => todo!("gimli::UnitType::Skeleton"),
+            gimli::UnitType::SplitCompilation(..) => todo!("gimli::UnitType::SplitCompilation"),
+            gimli::UnitType::SplitType { .. } => todo!("gimli::UnitType::SplitType"),
             }
         }
     }
