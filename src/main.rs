@@ -56,7 +56,7 @@ fn main() {
     println!("STATE: {}", state_main);
 
     let (addr, ty) = debug.get_variable(&state_main, &dump, "crate");
-    visit_type(0, &debug, &dump, &debug.get_type(&ty), addr);
+    visit_type(0, &debug, &dump, &debug.get_type(&ty), addr, Path::root());
 }
 
 fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u64) {
@@ -79,34 +79,110 @@ fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u
     }
 }
 
+struct Path<'a> {
+    parent: Option<&'a Path<'a>>,
+    node: PathNode<'a>,
+}
+impl<'a> Path<'a> {
+    fn root() -> Self {
+        Path {
+            parent: None,
+            node: PathNode::Null,
+        }
+    }
+    fn add<'r>(&'r self, node: PathNode<'r>) -> Path<'r> {
+        Path {
+            parent: if let PathNode::Null = self.node { None } else { Some(self) },
+            node,
+        }
+    }
+    fn index(&self, index: usize) -> Path<'_> {
+        self.add(PathNode::Index(index))
+    }
+    fn parent(&self, index: usize) -> Path<'_> {
+        self.add(PathNode::Parent(index))
+    }
+    fn field<'r>(&'r self, name: &'r str) -> Path<'r> {
+        self.add(PathNode::Field(name))
+    }
+    fn deref(&self) -> Path<'_> {
+        self.add(PathNode::Deref)
+    }
+}
+impl<'a> ::std::fmt::Display for Path<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(v) = self.parent {
+            v.fmt(f)?;
+        }
+        match self.node {
+        PathNode::Null => Ok(()),
+        PathNode::Field(name) => write!(f, ".{}", name),
+        PathNode::Parent(idx) => write!(f, "#{}", idx),
+        PathNode::Index(idx) => write!(f, "[{}]", idx),
+        PathNode::Deref => write!(f, ".*"),
+        }
+    }
+}
+enum PathNode<'a> {
+    Null,
+    Field(&'a str),
+    Parent(usize),
+    Index(usize),
+    Deref,
+}
+
+fn get_field(debug: &debug_info::DebugPool, ty: &debug_info::Type, path: &Path) -> (u64, debug_info::TypeRef) {
+    let (base, ty)  = if let Some(p) = path.parent {
+        let (base,ty) = get_field(debug, ty, p);
+        (base, debug.get_type(&ty))
+    }
+    else {
+        (0, ty)
+    };
+    match ty {
+    debug_info::Type::Struct(composite_type) =>
+        match path.node {
+        PathNode::Field(name) => {
+            let f = composite_type.iter_fields().find(|f| f.name == name).unwrap();
+            (base + f.offset, f.ty)
+        },
+        PathNode::Parent(index) => {
+            let (ofs, ty)= composite_type.parents().nth(index).unwrap();
+            (base + ofs, *ty)
+        },
+        PathNode::Null|PathNode::Index(_)|PathNode::Deref => panic!("Unexpected path node for `struct` in {}", path),
+        },
+    debug_info::Type::Union(composite_type) => 
+        match path.node {
+        PathNode::Field(name) => {
+            let f = composite_type.iter_fields().find(|f| f.name == name).unwrap();
+            (base + f.offset, f.ty)
+        },
+        PathNode::Null|
+        PathNode::Parent(_)|PathNode::Index(_)|PathNode::Deref => panic!("Unexpected path node for `union`"),
+        },
+    debug_info::Type::Primtive(_) => panic!("Getting field of a primitive"),
+    debug_info::Type::Pointer(_) => todo!("Pointer"),
+    debug_info::Type::Alias(type_ref) => get_field(debug, debug.get_type(type_ref), path),
+    debug_info::Type::Enum(_) => panic!("Getting field of an enum"),
+    }
+}
+
 struct StdVector {
     inner_ty: debug_info::TypeRef,
     begin: u64,
     end: u64,
     alloc_end: u64,
 }
-fn get_std_vector(debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, composite_type: &debug_info::CompositeType, addr: u64) -> StdVector {
+fn get_std_vector(debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64) -> StdVector {
     let inner_ty = {
-        let (_, ty) = composite_type.parents().next().unwrap();
-        let ty = debug.get_type(ty);    // vector_base
-        let debug_info::Type::Struct(ct) = ty else { panic!("Expected struct, got {:?}", ty); };
-        //println!("> {}", ct.name());
-        let f = ct.iter_fields().next().unwrap();   // _M_impl
-        let ty = debug.get_type(&f.ty);
-        let debug_info::Type::Struct(ct) = ty else { panic!("Expected struct, got {:?}", ty); };
-        //println!("> {}", ct.name());
-        let (_, ty) = ct.parents().nth(1).unwrap();
-        let ty = debug.get_type(ty);    // _Vector_impl_data
-        let debug_info::Type::Struct(ct) = ty else { panic!("Expected struct, got {:?}", ty); };
-        //println!("> {}", ct.name());
-        let f = ct.iter_fields().next().unwrap();   // _M_start
-        //println!("> {}: {}", f.name, debug.fmt_type_ref(&f.ty));
-        let mut ty = debug.get_type(&f.ty);
+        let (_, ty) = get_field(debug, ty, &Path::root().parent(0).field("_M_impl").parent(1).field("_M_start"));
+        let mut ty = debug.get_type(&ty);
         let ty = loop {
             ty = match ty {
-            debug_info::Type::Alias(ty) => debug.get_type(ty),
-            _ => break ty,
-            };
+                debug_info::Type::Alias(ty) => debug.get_type(ty),
+                _ => break ty,
+                };
         };
         let debug_info::Type::Pointer(ty) = ty else { panic!("Expected pointer, got {:?}", ty); };
         *ty
@@ -122,10 +198,10 @@ fn get_std_vector(debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, com
     }
 }
 
-fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64) {
-    println!("{:w$}{ty} @ {addr:#x}", "", ty=debug.fmt_type(ty), w=depth);
+fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64, path: Path) {
+    println!("{:depth$}{ty} @ {addr:#x} ({path})", "", ty=debug.fmt_type(ty));
     match ty {
-    debug_info::Type::Alias(ty) => visit_type(depth+1, debug, dump, debug.get_type(ty), addr),
+    debug_info::Type::Alias(ty) => visit_type(depth+1, debug, dump, debug.get_type(ty), addr, path),
     debug_info::Type::Struct(composite_type) => {
         // TODO: Special case some structs
         if composite_type.name() == "::std::__cxx11::struct basic_string<char, std::char_traits<char>, std::allocator<char> >" {
@@ -133,13 +209,13 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             return ;
         }
         if composite_type.name().starts_with("::std::struct vector<") {
-            let v = get_std_vector(debug, dump, composite_type, addr);
+            let v = get_std_vector(debug, dump, ty, addr);
             println!("VECTOR: {} {:#x}--{:#x}--{:#x}: `{}`", composite_type.name(), v.begin, v.end, v.alloc_end, debug.fmt_type_ref(&v.inner_ty));
             let inner_ty = debug.get_type(&v.inner_ty);
             let inner_size = debug.size_of(inner_ty);
             assert!(v.begin <= v.end && v.end <= v.alloc_end);
-            for a in (v.begin .. v.end).step_by(inner_size) {
-                visit_type(depth+1, debug, dump, inner_ty, a);
+            for (i,a) in (v.begin .. v.end).step_by(inner_size).enumerate() {
+                visit_type(depth+1, debug, dump, inner_ty, a, path.index(i));
             }
             return ;
         }
@@ -175,11 +251,11 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             // _M_single_bucket: @0x30: *=::std::__detail::struct _Hash_node_base,
             return ;
         }
-        for (ofs,ty) in composite_type.parents() {
-            visit_type(depth+1, debug, dump, &debug.get_type(ty), addr + ofs);
+        for (i,(ofs,ty)) in composite_type.parents().enumerate() {
+            visit_type(depth+1, debug, dump, &debug.get_type(ty), addr + ofs, path.parent(i));
         }
         for f in composite_type.iter_fields() {
-            visit_type(depth+1, debug, dump, &debug.get_type(&f.ty), addr + f.offset);
+            visit_type(depth+1, debug, dump, &debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
         }
     },
     debug_info::Type::Union(composite_type) => {
@@ -192,7 +268,7 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
         println!("{:depth$}->{:#x}", "", addr);
         if addr != 0 {
             if false {
-                visit_type(depth+1, debug, dump, &debug.get_type(dst_ty), addr);
+                visit_type(depth+1, debug, dump, &debug.get_type(dst_ty), addr, path.deref());
             }
         }
     },
