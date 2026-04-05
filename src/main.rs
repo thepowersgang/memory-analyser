@@ -204,11 +204,11 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
     debug_info::Type::Alias(ty) => visit_type(depth+1, debug, dump, debug.get_type(ty), addr, path),
     debug_info::Type::Struct(composite_type) => {
         // TODO: Special case some structs
-        if composite_type.name() == "::std::__cxx11::struct basic_string<char, std::char_traits<char>, std::allocator<char> >" {
+        if composite_type.name() == "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >" {
             // Get string data, and check for duplicates?
             return ;
         }
-        if composite_type.name().starts_with("::std::struct vector<") {
+        if composite_type.name().starts_with("std::vector<") {
             let v = get_std_vector(debug, dump, ty, addr);
             println!("VECTOR: {} {:#x}--{:#x}--{:#x}: `{}`", composite_type.name(), v.begin, v.end, v.alloc_end, debug.fmt_type_ref(&v.inner_ty));
             let inner_ty = debug.get_type(&v.inner_ty);
@@ -219,7 +219,7 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             }
             return ;
         }
-        if composite_type.name().starts_with("::std::struct map<") {
+        if composite_type.name().starts_with("std::map<") {
             println!("MAP: @{:#x}: TODO", addr);
             if false {
                 print!("MAP: "); dump_type_fields(debug, ty, 0); println!("");
@@ -227,6 +227,7 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             //todo!("map");
             // harder :( - Don't have an easy way of getting the inner type. No contained type has it
             // - Need to parse the type name, and find a matching inner type
+            //let types = parse_cpp_template(composite_type.name());
 
             // header:
             //_M_color: @0x8: ::std::enum _Rb_tree_color,

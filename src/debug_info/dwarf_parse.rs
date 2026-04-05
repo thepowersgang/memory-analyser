@@ -75,7 +75,9 @@ impl super::DebugPool
                 }
                 fn get_scoped_name(stack: &[State], prefix: &str, name: Option<&str>, ofs: ::gimli::UnitOffset) -> String {
                     let mut full_name = parent_name(stack).unwrap_or_default().to_owned();
-                    full_name.push_str("::");
+                    if !full_name.is_empty() {
+                        full_name.push_str("::");
+                    }
                     full_name.push_str(prefix);
                     use ::std::fmt::Write;
                     match name {
@@ -205,7 +207,7 @@ impl super::DebugPool
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let size = v.attr_value(::gimli::DW_AT_byte_size).map(|v| v.udata_value().expect("not UData")).unwrap_or(0);
                             let name = get_name(&debug_info, &unit, v);
-                            let name = get_scoped_name(&stack, "struct ", name, v.offset);
+                            let name = get_scoped_name(&stack, "", name, v.offset);
                             stack.push(State::InType(CompositeType { name, size: size as usize, fields: Vec::new(), parents: Vec::new() }, ty_ref, false, ));
                             continue;
                         },
