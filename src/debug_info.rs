@@ -155,13 +155,16 @@ impl DebugPool {
                 ::gimli::RegisterRule::Architectural => todo!("RegisterRule::Architectural"),
                 ::gimli::RegisterRule::Constant(v) => *v,
                 };
-            println!("{:?}: {:?} = {:#x}", r_name, rule, v);
+            println!("> {:?}: {:?} = {:#x}", r_name, rule, v);
             match r_name.0 {
             i @ 0 .. 16 => rv.gprs[i as usize] = v,
             16 => rv.pc = v,
             _ => {},
             }
         }
+        // Not sure if this is documented, but it seems to work
+        println!("> RSP = CFA {:#x}", cfa);
+        rv.gprs[7] = cfa;
         return rv;
     }
 
@@ -185,7 +188,6 @@ impl DebugPool {
                 E::Complete => {
                     let r= e.result();
                     assert!(r.len() == 1, "Multiple (or zero) pieces? {:?}", r);
-                    println!(" = {:?}", r);
                     match r[0].location
                     {
                     gimli::Location::Address { address } => break address,
@@ -238,6 +240,16 @@ impl DebugPool {
         match self.types[ty.0] {
         Some(ref v) => v,
         None => panic!("Type not populated: {:?} = {:?}", ty, self.type_lookup.iter().find(|(_,v)| v.0 == ty.0)),
+        }
+    }
+    pub fn size_of(&self, ty: &Type) -> usize {
+        match ty {
+        Type::Struct(composite_type) => composite_type.size,
+        Type::Union(composite_type) => composite_type.size,
+        Type::Primtive(primitive_type) => (primitive_type.bits as usize + 7) / 8,
+        Type::Pointer(_) => 8,
+        Type::Alias(type_ref) => self.size_of(self.get_type(type_ref)),
+        Type::Enum(_) => todo!("size_of: enum"),
         }
     }
 

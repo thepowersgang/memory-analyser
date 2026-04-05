@@ -135,9 +135,12 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
         if composite_type.name().starts_with("::std::struct vector<") {
             let v = get_std_vector(debug, dump, composite_type, addr);
             println!("VECTOR: {} {:#x}--{:#x}--{:#x}: `{}`", composite_type.name(), v.begin, v.end, v.alloc_end, debug.fmt_type_ref(&v.inner_ty));
-            //for a in (m_start .. m_finish).step_by(inner_size) {
-            //    visit_type(depth+1, debug, dump, debug.get_type(ty), addr),
-            //}
+            let inner_ty = debug.get_type(&v.inner_ty);
+            let inner_size = debug.size_of(inner_ty);
+            assert!(v.begin <= v.end && v.end <= v.alloc_end);
+            for a in (v.begin .. v.end).step_by(inner_size) {
+                visit_type(depth+1, debug, dump, inner_ty, a);
+            }
             return ;
         }
         if composite_type.name().starts_with("::std::struct map<") {
