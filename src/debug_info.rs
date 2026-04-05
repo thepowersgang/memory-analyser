@@ -208,12 +208,12 @@ impl DebugPool {
                     println!("cfa={:#x}", cfa);
                     e.resume_with_call_frame_cfa(cfa)
                 },
-                E::RequiresAtLocation(die_reference) => todo!("RequiresAtLocation"),
-                E::RequiresEntryValue(expression) => todo!(),
-                E::RequiresParameterRef(unit_offset) => todo!(),
+                E::RequiresAtLocation(_die_reference) => todo!("RequiresAtLocation"),
+                E::RequiresEntryValue(_expression) => todo!(),
+                E::RequiresParameterRef(_unit_offset) => todo!(),
                 E::RequiresRelocatedAddress(_) => todo!(),
                 E::RequiresIndexedAddress { index, relocate } => todo!(),
-                E::RequiresBaseType(unit_offset) => todo!("RequiresBaseType"),
+                E::RequiresBaseType(_unit_offset) => todo!("RequiresBaseType"),
                 };
             }
         },
