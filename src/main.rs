@@ -131,7 +131,14 @@ enum PathNode<'a> {
     Deref,
 }
 
+fn resolve_alias_chain<'a>(debug: &'a debug_info::DebugPool, mut ty: &'a debug_info::Type) -> &'a debug_info::Type {
+    while let debug_info::Type::Alias(tr) = ty {
+        ty = debug.get_type(tr);
+    }
+    ty
+}
 fn get_field(debug: &debug_info::DebugPool, ty: &debug_info::Type, path: &Path) -> (u64, debug_info::TypeRef) {
+    println!("get_field: {}", path);
     let (base, ty)  = if let Some(p) = path.parent {
         let (base,ty) = get_field(debug, ty, p);
         (base, debug.get_type(&ty))
@@ -139,11 +146,14 @@ fn get_field(debug: &debug_info::DebugPool, ty: &debug_info::Type, path: &Path) 
     else {
         (0, ty)
     };
+    let ty = resolve_alias_chain(debug, ty);
     match ty {
     debug_info::Type::Struct(composite_type) =>
         match path.node {
         PathNode::Field(name) => {
-            let f = composite_type.iter_fields().find(|f| f.name == name).unwrap();
+            let Some(f) = composite_type.iter_fields().find(|f| f.name == name) else {
+                panic!("Failed to find {:?} in {} ({})", name, composite_type.name(), path);
+            };
             (base + f.offset, f.ty)
         },
         PathNode::Parent(index) => {
@@ -163,7 +173,7 @@ fn get_field(debug: &debug_info::DebugPool, ty: &debug_info::Type, path: &Path) 
         },
     debug_info::Type::Primtive(_) => panic!("Getting field of a primitive"),
     debug_info::Type::Pointer(_) => todo!("Pointer"),
-    debug_info::Type::Alias(type_ref) => get_field(debug, debug.get_type(type_ref), path),
+    debug_info::Type::Alias(_) => panic!("Alias should be resolved"),
     debug_info::Type::Enum(_) => panic!("Getting field of an enum"),
     }
 }
@@ -177,13 +187,8 @@ struct StdVector {
 fn get_std_vector(debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64) -> StdVector {
     let inner_ty = {
         let (_, ty) = get_field(debug, ty, &Path::root().parent(0).field("_M_impl").parent(1).field("_M_start"));
-        let mut ty = debug.get_type(&ty);
-        let ty = loop {
-            ty = match ty {
-                debug_info::Type::Alias(ty) => debug.get_type(ty),
-                _ => break ty,
-                };
-        };
+        let ty = debug.get_type(&ty);
+        let ty = resolve_alias_chain(debug, ty);
         let debug_info::Type::Pointer(ty) = ty else { panic!("Expected pointer, got {:?}", ty); };
         *ty
         };
@@ -224,10 +229,15 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             if false {
                 print!("MAP: "); dump_type_fields(debug, ty, 0); println!("");
             }
-            //todo!("map");
-            // harder :( - Don't have an easy way of getting the inner type. No contained type has it
-            // - Need to parse the type name, and find a matching inner type
-            //let types = parse_cpp_template(composite_type.name());
+            // Get the inner (not type-erased) node type
+            let (_, rb_ty) = get_field(debug, ty, &Path::root().field("_M_t"));
+            let rb_ty = resolve_alias_chain(debug, debug.get_type(&rb_ty));
+            let debug_info::Type::Struct(ct) = rb_ty else { panic!("RB Tree not a struct/class") };
+            let node_type = resolve_alias_chain(debug, debug.get_type(&ct.sub_types["_Link_type"]));
+            let debug_info::Type::Pointer(node_type) = node_type else { panic!("Expected pointer, got {:?}", node_type)};
+            let node_type = resolve_alias_chain(debug, debug.get_type(node_type));
+            println!("> Node type: {}", debug.fmt_type(&node_type));
+            print!("MAP NODE: "); dump_type_fields(debug, node_type, 0); println!("");
 
             // header:
             //_M_color: @0x8: ::std::enum _Rb_tree_color,

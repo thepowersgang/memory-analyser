@@ -394,8 +394,18 @@ pub struct CompositeType {
     size: usize,
     fields: Vec<CompositeField>,
     parents: Vec<(u64, TypeRef)>,
+    pub sub_types: ::std::collections::HashMap<String,TypeRef>,
 }
 impl CompositeType {
+    fn new(name: String, size: usize) -> Self {
+        CompositeType {
+            name,
+            size,
+            fields: Default::default(),
+            parents: Default::default(),
+            sub_types: Default::default()
+        }
+    }
     pub fn name(&self) -> &str {
         &self.name
     }

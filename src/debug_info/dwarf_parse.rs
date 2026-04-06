@@ -192,9 +192,16 @@ impl super::DebugPool
                         gimli::DW_TAG_typedef => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let target_ty = self.get_typeref_from_attr(unit_index, v);
-                            println!("> {ty_ref:?} typedef: {:?}", get_name(&debug_info, &unit, v));
+                            let name = get_name(&debug_info, &unit, v);
+                            println!("> {ty_ref:?} typedef: {:?} ({})", name, get_scoped_name(&stack, "", name, v.offset));
                             if let Some(target_ty) = target_ty {
                                 self.types[ty_ref.0] = Some(Type::Alias(target_ty))
+                            }
+                            // If in a type, save against that type
+                            if let State::InType(ct, _, _) = stack.last_mut().unwrap() {
+                                if let Some(n) = name {
+                                    ct.sub_types.insert(n.to_owned(), ty_ref);
+                                }
                             }
                             continue
                         },
@@ -208,7 +215,7 @@ impl super::DebugPool
                             let size = v.attr_value(::gimli::DW_AT_byte_size).map(|v| v.udata_value().expect("not UData")).unwrap_or(0);
                             let name = get_name(&debug_info, &unit, v);
                             let name = get_scoped_name(&stack, "", name, v.offset);
-                            stack.push(State::InType(CompositeType { name, size: size as usize, fields: Vec::new(), parents: Vec::new() }, ty_ref, false, ));
+                            stack.push(State::InType(CompositeType::new(name, size as usize), ty_ref, false, ));
                             continue;
                         },
                         gimli::DW_TAG_enumeration_type => {
@@ -224,7 +231,7 @@ impl super::DebugPool
                             let size = v.attr_value(::gimli::DW_AT_byte_size).unwrap().udata_value().expect("not UData");
                             let name = get_name(&debug_info, &unit, v);
                             let name = get_scoped_name(&stack, "struct ", name, v.offset);
-                            stack.push(State::InType(CompositeType { name, size: size as usize, fields: Vec::new(), parents: Vec::new() }, ty_ref, true, ));
+                            stack.push(State::InType(CompositeType::new(name, size as usize), ty_ref, true, ));
                             continue;
                         },
                         gimli::DW_TAG_const_type => {
