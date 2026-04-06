@@ -231,7 +231,7 @@ impl super::DebugPool
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let size = v.attr_value(::gimli::DW_AT_byte_size).unwrap().udata_value().expect("not UData");
                             let name = get_name(&debug_info, &unit, v);
-                            let name = get_scoped_name(&stack, "struct ", name, v.offset);
+                            let name = get_scoped_name(&stack, "", name, v.offset);
                             stack.push(State::InType(CompositeType::new(name, size as usize), ty_ref, true, ));
                             continue;
                         },
