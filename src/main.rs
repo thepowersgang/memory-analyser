@@ -1,5 +1,19 @@
+//! 
+//! Load a core dump and enumerate memory usage
+//! 
+//! Outputs:
+//! - Structure instance counts
+//! - String duplication
+//! - Memory usage by structure
+//! - Memory for each variable (or member of a struct, to a limited depth)
+//! - Memory fragmentation
+//! 
 mod core_dump;
 mod debug_info;
+
+mod visit_helpers;
+use visit_helpers::{Path,get_field,resolve_alias_chain};
+mod type_handlers;
 
 #[derive(Clone)]
 struct CpuState {
@@ -59,6 +73,7 @@ fn main() {
     visit_type(0, &debug, &dump, &debug.get_type(&ty), addr, Path::root());
 }
 
+/// Dump the immediate fields of a structure (all direct data)
 fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u64) {
     match ty {
     debug_info::Type::Alias(ty) => dump_type_fields(debug, debug.get_type(ty), ofs),
@@ -89,133 +104,6 @@ fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u
     }
 }
 
-struct Path<'a> {
-    parent: Option<&'a Path<'a>>,
-    node: PathNode<'a>,
-}
-impl<'a> Path<'a> {
-    fn root() -> Self {
-        Path {
-            parent: None,
-            node: PathNode::Null,
-        }
-    }
-    fn add<'r>(&'r self, node: PathNode<'r>) -> Path<'r> {
-        Path {
-            parent: if let PathNode::Null = self.node { None } else { Some(self) },
-            node,
-        }
-    }
-    fn index(&self, index: usize) -> Path<'_> {
-        self.add(PathNode::Index(index))
-    }
-    fn parent(&self, index: usize) -> Path<'_> {
-        self.add(PathNode::Parent(index))
-    }
-    fn field<'r>(&'r self, name: &'r str) -> Path<'r> {
-        self.add(PathNode::Field(name))
-    }
-    fn deref(&self) -> Path<'_> {
-        self.add(PathNode::Deref)
-    }
-}
-impl<'a> ::std::fmt::Display for Path<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(v) = self.parent {
-            v.fmt(f)?;
-        }
-        match self.node {
-        PathNode::Null => Ok(()),
-        PathNode::Field(name) => write!(f, ".{}", name),
-        PathNode::Parent(idx) => write!(f, "#{}", idx),
-        PathNode::Index(idx) => write!(f, "[{}]", idx),
-        PathNode::Deref => write!(f, ".*"),
-        }
-    }
-}
-enum PathNode<'a> {
-    Null,
-    Field(&'a str),
-    Parent(usize),
-    Index(usize),
-    Deref,
-}
-
-fn resolve_alias_chain<'a>(debug: &'a debug_info::DebugPool, mut ty: &'a debug_info::Type) -> &'a debug_info::Type {
-    while let debug_info::Type::Alias(tr) = ty {
-        ty = debug.get_type(tr);
-    }
-    ty
-}
-fn get_field(debug: &debug_info::DebugPool, ty: &debug_info::Type, path: &Path) -> (u64, debug_info::TypeRef) {
-    //println!("get_field: {} in {}", path, debug.fmt_type(ty));
-    let (base, ty)  = if let Some(p) = path.parent {
-        let (base,ty) = get_field(debug, ty, p);
-        (base, debug.get_type(&ty))
-    }
-    else {
-        (0, ty)
-    };
-    let ty = resolve_alias_chain(debug, ty);
-    match ty {
-    debug_info::Type::Struct(composite_type) =>
-        match path.node {
-        PathNode::Field(name) => {
-            let Some(f) = composite_type.iter_fields().find(|f| f.name == name) else {
-                panic!("Failed to find {:?} in {} ({})", name, composite_type.name(), path);
-            };
-            (base + f.offset, f.ty)
-        },
-        PathNode::Parent(index) => {
-            let Some((ofs, ty)) = composite_type.parents().nth(index) else {
-                panic!("Failed to parent #{} in {} ({})", index, composite_type.name(), path);
-            };
-            (base + ofs, *ty)
-        },
-        PathNode::Null|PathNode::Index(_)|PathNode::Deref => panic!("Unexpected path node for `struct` in {}", path),
-        },
-    debug_info::Type::Union(composite_type) => 
-        match path.node {
-        PathNode::Field(name) => {
-            let f = composite_type.iter_fields().find(|f| f.name == name).unwrap();
-            (base + f.offset, f.ty)
-        },
-        PathNode::Null|
-        PathNode::Parent(_)|PathNode::Index(_)|PathNode::Deref => panic!("Unexpected path node for `union`"),
-        },
-    debug_info::Type::Array(_, _) => todo!("array"),
-    debug_info::Type::Primtive(_) => panic!("Getting field of a primitive"),
-    debug_info::Type::Pointer(_) => todo!("Pointer"),
-    debug_info::Type::Alias(_) => panic!("Alias should be resolved"),
-    debug_info::Type::Enum(_) => panic!("Getting field of an enum"),
-    }
-}
-
-struct StdVector {
-    inner_ty: debug_info::TypeRef,
-    begin: u64,
-    end: u64,
-    alloc_end: u64,
-}
-fn get_std_vector(debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64) -> StdVector {
-    let inner_ty = {
-        let (_, ty) = get_field(debug, ty, &Path::root().parent(0).field("_M_impl").parent(1).field("_M_start"));
-        let ty = debug.get_type(&ty);
-        let ty = resolve_alias_chain(debug, ty);
-        let debug_info::Type::Pointer(ty) = ty else { panic!("Expected pointer, got {:?}", ty); };
-        *ty
-        };
-    let m_start = dump.read_ptr(addr + 0);
-    let m_finish = dump.read_ptr(addr + 8);
-    let m_end_of_storage = dump.read_ptr(addr + 16);
-    StdVector {
-        inner_ty,
-        begin: m_start,
-        end: m_finish,
-        alloc_end: m_end_of_storage,
-    }
-}
-
 fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64, path: Path) {
     println!("{:depth$}{ty} @ {addr:#x} ({path})", "", ty=debug.fmt_type(ty));
     match ty {
@@ -226,25 +114,17 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             // Get string data, and check for duplicates?
             return ;
         }
-        if composite_type.name().starts_with("std::unique_ptr<") {
-            let (o, ptr_ty) = get_field(debug, ty, &Path::root().field("_M_t").parent(0).field("_M_t").parent(0).parent(1).field("_M_head_impl"));
-            let ptr_ty = resolve_alias_chain(debug, debug.get_type(&ptr_ty));
-            let ptr = dump.read_ptr(addr + o);
-            let debug_info::Type::Pointer(inner_ty) = ptr_ty else { panic!("Expected pointer") };
-            let inner_ty = resolve_alias_chain(debug, debug.get_type(&inner_ty));
-            if ptr != 0 {
-                visit_type(depth, debug, dump, inner_ty, ptr, path.deref());
+        if let Some(p) = type_handlers::CppUniquePtr::opt_read(debug, dump, ty, addr) {
+            if p.target_addr != 0 {
+                visit_type(depth, debug, dump, p.target_ty, p.target_addr, path.deref());
             }
             return ;
         }
-        if composite_type.name().starts_with("std::vector<") {
-            let v = get_std_vector(debug, dump, ty, addr);
-            println!("VECTOR: {} {:#x}--{:#x}--{:#x}: `{}`", composite_type.name(), v.begin, v.end, v.alloc_end, debug.fmt_type_ref(&v.inner_ty));
-            let inner_ty = debug.get_type(&v.inner_ty);
-            let inner_size = debug.size_of(inner_ty);
+        if let Some(v) = type_handlers::CppVector::opt_read(debug, dump, ty, addr) {
+            let inner_size = debug.size_of(v.item_ty);
             assert!(v.begin <= v.end && v.end <= v.alloc_end);
             for (i,a) in (v.begin .. v.end).step_by(inner_size).enumerate() {
-                visit_type(depth+1, debug, dump, inner_ty, a, path.index(i));
+                visit_type(depth+1, debug, dump, v.item_ty, a, path.index(i));
             }
             return ;
         }
@@ -359,10 +239,6 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             }
             return ;
         }
-        if composite_type.name() == "AST::GenericParam" {
-            print!("TU: "); dump_type_fields(debug, ty, 0); println!("");
-            panic!("AST::GenericParam is a TU");
-        }
 
         for (i,(ofs,ty)) in composite_type.parents().enumerate() {
             visit_type(depth+1, debug, dump, &debug.get_type(ty), addr + ofs, path.parent(i));
@@ -389,6 +265,7 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
     }
 }
 
+/// Is this type a mrustc TAGGED_UNION? Returns the offset of the tag and data, and the inner union
 fn is_mrustc_tagged_union<'d>(debug: &'d debug_info::DebugPool, composite_type: &debug_info::CompositeType) -> Option<(u64, u64, &'d debug_info::CompositeType)> {
     if composite_type.fields.len() >= 2
         && composite_type.fields[0].name == "m_tag"
