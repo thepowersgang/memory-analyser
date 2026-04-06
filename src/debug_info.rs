@@ -194,8 +194,14 @@ impl DebugPool {
                     a @ _ => todo!("Location: {:?}", a),
                     }
                     },
-                E::RequiresMemory { address, size, space, base_type } => todo!("RequiresMemory"),
-                E::RequiresRegister { register, base_type }
+                E::RequiresMemory { address, size, space, base_type: _ } => {
+                    assert!(space.is_none(), "Handle address spaces: space={:?}", space);
+                    assert!(size <= 8, "TODO: Large reads ({} bytes)", size);
+                    let mut buf = [0; 8];
+                    memory.read_bytes(address, &mut buf[..size as usize]);
+                    e.resume_with_memory(::gimli::Value::Generic(u64::from_le_bytes(buf)))
+                },
+                E::RequiresRegister { register, base_type: _ }
                     => e.resume_with_register(::gimli::Value::U64(get_register(state, &register))),
                 E::RequiresFrameBase => e.resume_with_frame_base(self.evaluate_position(state, memory, &fcn_rec.frame_base, fcn_rec)),
                 E::RequiresTls(_) => todo!("RequiresTls"),
@@ -212,7 +218,7 @@ impl DebugPool {
                 E::RequiresEntryValue(_expression) => todo!(),
                 E::RequiresParameterRef(_unit_offset) => todo!(),
                 E::RequiresRelocatedAddress(_) => todo!(),
-                E::RequiresIndexedAddress { index, relocate } => todo!(),
+                E::RequiresIndexedAddress { index: _, relocate: _ } => todo!(),
                 E::RequiresBaseType(_unit_offset) => todo!("RequiresBaseType"),
                 };
             }
@@ -273,7 +279,7 @@ impl DebugPool {
         Type::Enum(name) => f.write_str(name),
         Type::Struct(composite_type) => f.write_str(&composite_type.name),
         Type::Union(composite_type) => f.write_str(&composite_type.name),
-        Type::Primtive(primitive_type) => write!(f, "prim{}", primitive_type.bits),
+        Type::Primtive(primitive_type) => write!(f, "{}[[bits={}]]", primitive_type.name, primitive_type.bits),
         Type::Pointer(type_ref) => {
             f.write_str("*")?;
             self.fmt_type_ref_inner(f, type_ref)
