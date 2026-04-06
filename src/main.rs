@@ -12,7 +12,7 @@ mod core_dump;
 mod debug_info;
 
 mod visit_helpers;
-use visit_helpers::{Path,get_field,resolve_alias_chain};
+use visit_helpers::{Path,resolve_alias_chain};
 mod type_handlers;
 
 #[derive(Clone)]
@@ -128,76 +128,14 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             }
             return ;
         }
-        if composite_type.name().starts_with("std::map<") {
-            println!("MAP: @{:#x}: TODO", addr);
-            if false {
-                print!("MAP: "); dump_type_fields(debug, ty, 0); println!("");
-            }
-            let item_type = debug.get_type(&composite_type.sub_types["value_type"]);
-            // Get the inner (not type-erased) node type
-            let (_, rb_ty) = get_field(debug, ty, &Path::root().field("_M_t"));
-            let rb_ty = resolve_alias_chain(debug, debug.get_type(&rb_ty));
-            let debug_info::Type::Struct(ct) = rb_ty else { panic!("RB Tree not a struct/class") };
-            let node_type = resolve_alias_chain(debug, debug.get_type(&ct.sub_types["_Link_type"]));
-            let debug_info::Type::Pointer(node_type) = node_type else { panic!("Expected pointer, got {:?}", node_type)};
-            let node_type = resolve_alias_chain(debug, debug.get_type(node_type));
-            println!("> Item type: {}", debug.fmt_type(&item_type));
-            println!("> Node type: {}", debug.fmt_type(&node_type));
-            print!("MAP NODE: "); dump_type_fields(debug, node_type, 0); println!("");
-
-            struct Node {
-                addr: u64,
-                left_addr: u64,
-                parent_addr: u64,
-                right_addr: u64,
-            }
-            impl Node {
-                fn read(dump: &core_dump::CoreDump, addr: u64) -> Node {
-                    if addr == 0 {
-                        return Node { addr, left_addr: 0, parent_addr: 0, right_addr: 0 };
-                    }
-                    Node {
-                        addr,
-                        parent_addr: dump.read_ptr(addr + 0x8),
-                        left_addr: dump.read_ptr(addr + 0x10),
-                        right_addr: dump.read_ptr(addr + 0x18),
-                    }
-                }
-                fn is_nil(&self) -> bool {
-                    self.addr == 0
-                }
-            }
-            let node_count = dump.read_ptr(addr + 0x28);
-            println!("> node_count={node_count}");
-            if node_count > 0 {
-                // Read the root node
-                let mut cur_n = Node::read(dump, addr + 8);
-                // Traverse into the first LHS node
-                cur_n = Node::read(dump, cur_n.left_addr);
-                while !cur_n.is_nil() {
-                    // Visit inner
-                    println!("> VISIT {:#x}: {}", cur_n.addr + 0x20, debug.fmt_type(item_type));
-
-                    // Increment iterator (See `_Rb_tree_increment` implementtion)
-                    if cur_n.right_addr != 0 {
-                        // Iterate into the RHS until no more LHS
-                        cur_n = Node::read(dump, cur_n.right_addr);
-                        while cur_n.left_addr != 0 {
-                            cur_n = Node::read(dump, cur_n.left_addr);
-                        }
-                    }
-                    else {
-                        let mut p = Node::read(dump, cur_n.parent_addr);
-                        while cur_n.addr == p.right_addr {
-                            let pa = p.parent_addr;
-                            cur_n = p;
-                            p = Node::read(dump, pa);
-                        }
-                        if cur_n.right_addr != p.addr {
-                            cur_n = p;
-                        }
-                    }
-                }
+        if let Some(m) = type_handlers::CppMap::opt_read(debug, dump, ty, addr) {
+            let mut n = m.cur_node;
+            let mut i = 0;
+            while !n.is_nil()
+            {
+                visit_type(depth, debug, dump, m.item_type, n.data_addr(), path.index(i));
+                n = n.next(dump);
+                i += 1;
             }
             return ;
         }
