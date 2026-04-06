@@ -73,15 +73,14 @@ impl super::DebugPool
                     }
                     None
                 }
-                fn get_scoped_name(stack: &[State], prefix: &str, name: Option<&str>, ofs: ::gimli::UnitOffset) -> String {
+                fn get_scoped_name(stack: &[State], class: &str, name: Option<&str>, ofs: ::gimli::UnitOffset) -> String {
                     let mut full_name = parent_name(stack).unwrap_or_default().to_owned();
                     if !full_name.is_empty() {
                         full_name.push_str("::");
                     }
-                    full_name.push_str(prefix);
                     use ::std::fmt::Write;
                     match name {
-                    None => { let _ = write!(full_name, "@{}", ofs.0); },
+                    None => { let _ = write!(full_name, "{class}@{}", ofs.0); },
                     Some(n) => full_name.push_str(n),
                     }
                     full_name
@@ -154,12 +153,12 @@ impl super::DebugPool
                         {
                         gimli::DW_TAG_namespace => {
                             let name = get_name(&debug_info, &unit, v);
-                            let full_name = get_scoped_name(&stack, "", name, v.offset);
+                            let full_name = get_scoped_name(&stack, "ns", name, v.offset);
                             stack.push(State::Namespace(full_name));
                         },
                         gimli::DW_TAG_subprogram => {
                             let name = get_name(&debug_info, &unit, v);
-                            let full_name = get_scoped_name(&stack, "", name, v.offset);
+                            let full_name = get_scoped_name(&stack, "fn", name, v.offset);
                             let frame_base = v.attr_value(::gimli::DW_AT_frame_base).map(|fb| {
                                 match fb
                                 {
@@ -185,7 +184,7 @@ impl super::DebugPool
                             println!("> {ty_ref:?} base type: {:?}", get_name(&debug_info, &unit, v));
                             self.types[ty_ref.0] = Some(Type::Primtive(super::PrimitiveType {
                                 bits: size_bits.expect("No size?") as u32,
-                                name: get_scoped_name(&stack, "", get_name(&debug_info, &unit, v), v.offset),
+                                name: get_scoped_name(&stack, "prim", get_name(&debug_info, &unit, v), v.offset),
                             }));
                             continue
                         },
@@ -193,7 +192,7 @@ impl super::DebugPool
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let target_ty = self.get_typeref_from_attr(unit_index, v);
                             let name = get_name(&debug_info, &unit, v);
-                            println!("> {ty_ref:?} typedef: {:?} ({})", name, get_scoped_name(&stack, "", name, v.offset));
+                            println!("> {ty_ref:?} typedef: {:?} ({})", name, get_scoped_name(&stack, "tydef", name, v.offset));
                             if let Some(target_ty) = target_ty {
                                 self.types[ty_ref.0] = Some(Type::Alias(target_ty))
                             }
@@ -215,14 +214,14 @@ impl super::DebugPool
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let size = v.attr_value(::gimli::DW_AT_byte_size).map(|v| v.udata_value().expect("not UData")).unwrap_or(0);
                             let name = get_name(&debug_info, &unit, v);
-                            let name = get_scoped_name(&stack, "", name, v.offset);
+                            let name = get_scoped_name(&stack, "struct", name, v.offset);
                             stack.push(State::InType(CompositeType::new(name, size as usize), ty_ref, false, ));
                             continue;
                         },
                         gimli::DW_TAG_enumeration_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let name = get_name(&debug_info, &unit, v);
-                            let name = get_scoped_name(&stack, "enum ", name, v.offset);
+                            let name = get_scoped_name(&stack, "enum", name, v.offset);
                             println!("> {ty_ref:?} enum: {:?}", name);
                             self.types[ty_ref.0] = Some(Type::Enum(name));
                             continue;
@@ -231,7 +230,7 @@ impl super::DebugPool
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let size = v.attr_value(::gimli::DW_AT_byte_size).unwrap().udata_value().expect("not UData");
                             let name = get_name(&debug_info, &unit, v);
-                            let name = get_scoped_name(&stack, "", name, v.offset);
+                            let name = get_scoped_name(&stack, "union", name, v.offset);
                             stack.push(State::InType(CompositeType::new(name, size as usize), ty_ref, true, ));
                             continue;
                         },
