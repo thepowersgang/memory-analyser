@@ -207,8 +207,9 @@ impl super::DebugPool
                         },
                         gimli::DW_TAG_array_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
-                            let target_ty = self.get_typeref_from_attr(unit_index, v);
+                            let target_ty = self.get_typeref_from_attr(unit_index, v).expect("No inner type for array");
                             println!("> {ty_ref:?} array of {:?}", target_ty);
+                            self.types[ty_ref.0] = Some(Type::Array(target_ty, 0));
                         },
                         gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);

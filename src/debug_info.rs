@@ -256,6 +256,7 @@ impl DebugPool {
         Type::Pointer(_) => 8,
         Type::Alias(type_ref) => self.size_of(self.get_type(type_ref)),
         Type::Enum(_) => todo!("size_of: enum"),
+        Type::Array(inner, count) => if *count == 0 { 0 } else { self.size_of(self.get_type(inner)) * *count },
         }
     }
 
@@ -288,6 +289,13 @@ impl DebugPool {
             // TODO: have the name save too?
             f.write_str("=")?;
             self.fmt_type_ref_inner(f, type_ref)
+        },
+        Type::Array(inner, count) => {
+            f.write_str("[")?;
+            self.fmt_type_ref_inner(f, inner)?;
+            f.write_str(";")?;
+            write!(f, "{}", count)?;
+            f.write_str("]")
         }
         }
     }
@@ -388,6 +396,7 @@ pub enum Type {
     Pointer(TypeRef),
     Alias(TypeRef),
     Enum(String),
+    Array(TypeRef, usize),
 }
 #[derive(Debug)]
 pub struct PrimitiveType {

@@ -171,6 +171,7 @@ fn get_field(debug: &debug_info::DebugPool, ty: &debug_info::Type, path: &Path) 
         PathNode::Null|
         PathNode::Parent(_)|PathNode::Index(_)|PathNode::Deref => panic!("Unexpected path node for `union`"),
         },
+    debug_info::Type::Array(_, _) => todo!("array"),
     debug_info::Type::Primtive(_) => panic!("Getting field of a primitive"),
     debug_info::Type::Pointer(_) => todo!("Pointer"),
     debug_info::Type::Alias(_) => panic!("Alias should be resolved"),
@@ -272,6 +273,7 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
     debug_info::Type::Union(composite_type) => {
         todo!("Found union, needs handling: {:?}", composite_type.name());
     },
+    debug_info::Type::Array(..) => todo!("visit_type: array"),
     debug_info::Type::Enum(_) => {},
     debug_info::Type::Primtive(_) => {},
     debug_info::Type::Pointer(dst_ty) => {
