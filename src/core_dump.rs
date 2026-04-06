@@ -196,6 +196,11 @@ impl CoreDump {
         self.read_bytes(addr, &mut v);
         u64::from_le_bytes(v)
     }
+    pub fn read_u32(&self, addr: u64) -> u32 {
+        let mut v = [0; 4];
+        self.read_bytes(addr, &mut v);
+        u32::from_le_bytes(v)
+    }
 }
 
 struct ChunkCache {

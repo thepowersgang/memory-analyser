@@ -65,7 +65,9 @@ fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u
     debug_info::Type::Struct(composite_type) => {
         print!("{} {{", composite_type.name());
         for (o,ty) in composite_type.parents() {
+            print!(" ");
             dump_type_fields(debug, &debug.get_type(ty), ofs + o);
+            print!(";");
         }
         for f in composite_type.iter_fields() {
             print!(" {}: ", f.name);
@@ -74,7 +76,15 @@ fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u
         }
         print!(" }}");
         },
-    debug_info::Type::Union(_) => todo!(),
+    debug_info::Type::Union(u) => {
+        print!("union {} {{", u.name());
+        for f in u.iter_fields() {
+            print!(" {}: ", f.name);
+            dump_type_fields(debug, &debug.get_type(&f.ty), ofs+f.offset);
+            print!(",");
+        }
+        print!(" }}");
+    },
     _ => print!("@{ofs:#x}: {}", debug.fmt_type(ty)),
     }
 }
@@ -138,7 +148,7 @@ fn resolve_alias_chain<'a>(debug: &'a debug_info::DebugPool, mut ty: &'a debug_i
     ty
 }
 fn get_field(debug: &debug_info::DebugPool, ty: &debug_info::Type, path: &Path) -> (u64, debug_info::TypeRef) {
-    println!("get_field: {} in {}", path, debug.fmt_type(ty));
+    //println!("get_field: {} in {}", path, debug.fmt_type(ty));
     let (base, ty)  = if let Some(p) = path.parent {
         let (base,ty) = get_field(debug, ty, p);
         (base, debug.get_type(&ty))
@@ -325,6 +335,35 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             // _M_single_bucket: @0x30: *=::std::__detail::struct _Hash_node_base,
             return ;
         }
+
+        // TODO: detect mrustc tagged unions (check for m_tag and m_data fields)
+        if let Some((t_o, d_o, d_u)) = is_mrustc_tagged_union(debug, composite_type) {
+            if false {
+                print!("TU: "); dump_type_fields(debug, ty, 0); println!("");
+            }
+            let tag = dump.read_u32(addr + t_o) as usize;
+            if tag == 0 {
+                //TAGDEAD
+            }
+            else if tag > d_u.fields.len() {
+                panic!("Invalid tagged union: tag out of range {:#x} > {} ({})", tag, d_u.fields.len(), path);
+                //return ;
+            }
+            else {
+                let f = &d_u.fields[tag-1];
+                let ty = debug.get_type(&f.ty);
+                visit_type(depth, debug, dump, ty, addr + d_o, path.field(&f.name));
+            }
+            for f in composite_type.iter_fields().skip(2) {
+                visit_type(depth+1, debug, dump, &debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
+            }
+            return ;
+        }
+        if composite_type.name() == "AST::GenericParam" {
+            print!("TU: "); dump_type_fields(debug, ty, 0); println!("");
+            panic!("AST::GenericParam is a TU");
+        }
+
         for (i,(ofs,ty)) in composite_type.parents().enumerate() {
             visit_type(depth+1, debug, dump, &debug.get_type(ty), addr + ofs, path.parent(i));
         }
@@ -347,5 +386,23 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             }
         }
     },
+    }
+}
+
+fn is_mrustc_tagged_union<'d>(debug: &'d debug_info::DebugPool, composite_type: &debug_info::CompositeType) -> Option<(u64, u64, &'d debug_info::CompositeType)> {
+    if composite_type.fields.len() >= 2
+        && composite_type.fields[0].name == "m_tag"
+        && composite_type.fields[1].name == "m_data"
+    {
+        let d_ty = resolve_alias_chain(debug, debug.get_type(&composite_type.fields[1].ty));
+        let debug_info::Type::Union(u) = d_ty else { return None };
+        Some((
+            composite_type.fields[0].offset,
+            composite_type.fields[1].offset,
+            u
+        ))
+    }
+    else {
+        None
     }
 }

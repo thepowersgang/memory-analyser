@@ -407,7 +407,7 @@ pub struct PrimitiveType {
 pub struct CompositeType {
     name: String,
     size: usize,
-    fields: Vec<CompositeField>,
+    pub fields: Vec<CompositeField>,
     parents: Vec<(u64, TypeRef)>,
     pub sub_types: ::std::collections::HashMap<String,TypeRef>,
 }
