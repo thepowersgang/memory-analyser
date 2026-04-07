@@ -79,6 +79,9 @@ fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u
     debug_info::Type::Alias(ty) => dump_type_fields(debug, debug.get_type(ty), ofs),
     debug_info::Type::Struct(composite_type) => {
         print!("{} {{", composite_type.name());
+        for (name,ty) in &composite_type.sub_types {
+            print!(" type {} = {};", name, debug.fmt_type_ref(ty));
+        }
         for (o,ty) in composite_type.parents() {
             print!(" ");
             dump_type_fields(debug, &debug.get_type(ty), ofs + o);
@@ -105,9 +108,10 @@ fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u
 }
 
 fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64, path: Path) {
+    let ty = resolve_alias_chain(debug, ty);
     println!("{:depth$}{ty} @ {addr:#x} ({path})", "", ty=debug.fmt_type(ty));
     match ty {
-    debug_info::Type::Alias(ty) => visit_type(depth+1, debug, dump, debug.get_type(ty), addr, path),
+    debug_info::Type::Alias(_) => panic!("Should be resolved above"),
     debug_info::Type::Struct(composite_type) => {
         // TODO: Special case some structs
         if composite_type.name() == "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >" {
@@ -139,18 +143,15 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             }
             return ;
         }
-        if composite_type.name().starts_with("std::unordered_map<") {
-            println!("UNORDERED MAP: @{:#x}: TODO", addr);
-            //print!("UNORDERED MAP: "); dump_type_fields(debug, ty, 0); println!("");
-            //todo!("unordered_map");
-            // TODO: Same problem as `std::map`, there's no contained type in here
-            // _M_buckets: @0x0: *=*=::std::__detail::struct _Hash_node_base,
-            // _M_bucket_count: @0x8: prim64,
-            // _M_before_begin._M_nxt: @0x10: *::std::__detail::struct _Hash_node_base,
-            // _M_element_count: @0x18: prim64,
-            // _M_rehash_policy._M_max_load_factor: @0x20: prim32,
-            // _M_rehash_policy._M_next_resize: @0x28: prim64,
-            // _M_single_bucket: @0x30: *=::std::__detail::struct _Hash_node_base,
+        if let Some(m) = type_handlers::CppUnorderedMap::opt_read(debug, dump, ty, addr) {
+            let mut n = m.first_node;
+            let mut i = 0;
+            while !n.is_nil()
+            {
+                visit_type(depth, debug, dump, m.item_type, n.data_addr(), path.index(i));
+                n = n.next(dump);
+                i += 1;
+            }
             return ;
         }
 

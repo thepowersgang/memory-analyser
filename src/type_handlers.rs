@@ -152,3 +152,73 @@ impl CppMapNode {
         cur_n
     }
 }
+
+pub struct CppUnorderedMap<'d> {
+    // the std::pair
+    pub item_type: &'d Type,
+    pub first_node: CppUnorderedMapNode,
+}
+impl<'d> CppUnorderedMap<'d> {
+    pub fn opt_read(debug: &'d DebugPool, dump: &CoreDump, ty: &Type, addr: u64) -> Option<Self> {
+        let Type::Struct(composite_type) = ty else {
+            return None;
+        };
+        if !composite_type.name().starts_with("std::unordered_map<") {
+            return None;
+        }
+        let item_type = resolve_alias_chain(debug, debug.get_type(&composite_type.sub_types["value_type"]));
+        //print!("UNORDERED MAP: "); crate::dump_type_fields(debug, ty, 0); println!("");
+        let node_ptr_ty = {
+            let i = debug.get_type(&composite_type.fields[0].ty);
+            let i = resolve_alias_chain(debug, i);
+            let Type::Struct(i) = i else { panic!("Expected struct, got {}", debug.fmt_type(i)) };
+            resolve_alias_chain(debug, debug.get_type(&i.sub_types["__node_ptr"]))
+        };
+        let node_ty = {
+            let Type::Pointer(i) = node_ptr_ty else { panic!("Expected pointer, got {}", debug.fmt_type(node_ptr_ty)) };
+            resolve_alias_chain(debug, debug.get_type(i))
+        };
+        let (data_ofs, _) = get_field(debug, node_ty, &Path::root().parent(1).parent(0).field("_M_storage").field("_M_storage").field("__data"));
+        //print!("UNORDERED MAP NODE: "); crate::dump_type_fields(debug, node_ty, 0); println!("");
+
+        // _M_buckets: @0x0: *=*=::std::__detail::struct _Hash_node_base,
+        // _M_bucket_count: @0x8: prim64,
+        // _M_before_begin._M_nxt: @0x10: *::std::__detail::struct _Hash_node_base,
+        // _M_element_count: @0x18: prim64,
+        // _M_rehash_policy._M_max_load_factor: @0x20: prim32,
+        // _M_rehash_policy._M_next_resize: @0x28: prim64,
+        // _M_single_bucket: @0x30: *=::std::__detail::struct _Hash_node_base,
+
+        let first_node_addr = dump.read_ptr(addr + 0x10);
+        Some(CppUnorderedMap {
+            item_type,
+            first_node: CppUnorderedMapNode::read(dump, first_node_addr, data_ofs)
+        })
+    }
+}
+pub struct CppUnorderedMapNode {
+    node_addr: u64,
+    data_ofs: u64,
+}
+impl CppUnorderedMapNode {
+    fn read(dump: &CoreDump, addr: u64, data_ofs: u64) -> Self {
+        let _ = dump;
+        if addr == 0 {
+            return CppUnorderedMapNode { node_addr: 0, data_ofs };
+        }
+        CppUnorderedMapNode {
+            node_addr: addr,
+            data_ofs,
+        }
+    }
+    pub fn is_nil(&self) -> bool {
+        self.node_addr == 0
+    }
+    pub fn data_addr(&self) -> u64 {
+        self.node_addr + self.data_ofs
+    }
+    pub fn next(&self, dump: &CoreDump) -> Self {
+        let next_addr = dump.read_ptr(self.node_addr);
+        Self::read(dump, next_addr, self.data_ofs)
+    }
+}
