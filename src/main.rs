@@ -111,6 +111,9 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
     // TODO: if the last entry in the path is a deref, or is the root - then get the direct size of this type and add to total used
     let ty = resolve_alias_chain(debug, ty);
     println!("{:depth$}{ty} @ {addr:#x} ({path})", "", ty=debug.fmt_type(ty));
+
+    // TODO: Forward-declared structs are empty, but the filled version should still exist. Need to match the two together (by name?)
+
     match ty {
     debug_info::Type::Alias(_) => panic!("Should be resolved above"),
     debug_info::Type::Struct(composite_type) => {
