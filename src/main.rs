@@ -114,9 +114,9 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
     match ty {
     debug_info::Type::Alias(_) => panic!("Should be resolved above"),
     debug_info::Type::Struct(composite_type) => {
-        // TODO: Special case some structs
+
         if composite_type.name() == "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >" {
-            // Get string data, and check for duplicates?
+            // TODO: Get string data, and check for duplicates?
             return ;
         }
         if let Some(p) = type_handlers::CppUniquePtr::opt_read(debug, dump, ty, addr) {

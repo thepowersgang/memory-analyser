@@ -96,7 +96,14 @@ impl super::DebugPool
                                 self.functions.insert(n, fr);
                             } 
                             State::InType(ct, ty, is_union) => {
-                                //println!("END type {}", name);
+                                if true {
+                                    print!("{} {}: {{", if is_union { "union" } else { "struct" }, ct.name);
+                                    for f in &ct.fields {
+                                        print!(" {}: {:?},", f.name, f.ty);
+                                    }
+                                    println!(" }}");
+                                }
+                                
                                 self.types[ty.0] = Some(if is_union {
                                     Type::Union(ct)
                                 }else {
@@ -215,6 +222,7 @@ impl super::DebugPool
                             let size = v.attr_value(::gimli::DW_AT_byte_size).map(|v| v.udata_value().expect("not UData")).unwrap_or(0);
                             let name = get_name(&debug_info, &unit, v);
                             let name = get_scoped_name(&stack, "struct", name, v.offset);
+                            println!("> {ty_ref:?} struct: {:?}", name);
                             stack.push(State::InType(CompositeType::new(name, size as usize), ty_ref, false, ));
                             continue;
                         },
