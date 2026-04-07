@@ -30,6 +30,46 @@ impl<'d> CppUniquePtr<'d> {
     }
 }
 
+pub struct CppSharedPtr<'d> {
+    pub target_addr: u64,
+    pub target_ty: &'d Type,
+    pub count_addr: u64,
+    pub count_ty: &'d Type,
+    //pub alloc_addr: u64,
+    //pub alloc_ty: &'d Type,
+}
+impl<'d> CppSharedPtr<'d> {
+    pub fn opt_read(debug: &'d DebugPool, dump: &CoreDump, ty: &Type, addr: u64) -> Option<Self> {
+        let Type::Struct(composite_type) = ty else {
+            return None;
+        };
+        if composite_type.name().starts_with("std::shared_ptr<") {
+            let (ptr_o, ptr_ty) = get_field(debug, ty, &&Path::root().parent(0).field("_M_ptr"));
+            let (rc_o, rc_ty) = get_field(debug, ty, &&Path::root().parent(0).field("_M_refcount").field("_M_pi"));
+            let inner_ty = {
+                let i = resolve_alias_chain(debug, debug.get_type(&ptr_ty));
+                let Type::Pointer(i) = i else { panic!("Expected pointer") };
+                resolve_alias_chain(debug, debug.get_type(&i))
+            };
+            let rc_ty = {
+                let i = resolve_alias_chain(debug, debug.get_type(&rc_ty));
+                let Type::Pointer(i) = i else { panic!("Expected pointer") };
+                resolve_alias_chain(debug, debug.get_type(&i))
+            };
+
+            Some(CppSharedPtr {
+                target_addr: dump.read_ptr(addr + ptr_o),
+                target_ty: inner_ty,
+                count_addr: dump.read_ptr(addr + rc_o),
+                count_ty: rc_ty,
+            })
+        }
+        else {
+            None
+        }
+    }
+}
+
 pub struct CppVector<'d> {
     pub begin: u64,
     pub end: u64,

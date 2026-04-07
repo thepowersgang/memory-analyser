@@ -108,6 +108,7 @@ fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u
 }
 
 fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64, path: Path) {
+    // TODO: if the last entry in the path is a deref, or is the root - then get the direct size of this type and add to total used
     let ty = resolve_alias_chain(debug, ty);
     println!("{:depth$}{ty} @ {addr:#x} ({path})", "", ty=debug.fmt_type(ty));
     match ty {
@@ -120,7 +121,16 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
         }
         if let Some(p) = type_handlers::CppUniquePtr::opt_read(debug, dump, ty, addr) {
             if p.target_addr != 0 {
-                visit_type(depth, debug, dump, p.target_ty, p.target_addr, path.deref());
+                visit_type(depth+1, debug, dump, p.target_ty, p.target_addr, path.deref());
+            }
+            return ;
+        }
+        if let Some(p) = type_handlers::CppSharedPtr::opt_read(debug, dump, ty, addr) {
+            if p.target_addr != 0 {
+                visit_type(depth+1, debug, dump, p.target_ty, p.target_addr, path.field("data").deref());
+            }
+            if p.count_addr != 0 {
+                visit_type(depth+1, debug, dump, p.count_ty, p.count_addr, path.field("refcount").deref());
             }
             return ;
         }
@@ -137,7 +147,7 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             let mut i = 0;
             while !n.is_nil()
             {
-                visit_type(depth, debug, dump, m.item_type, n.data_addr(), path.index(i));
+                visit_type(depth+1, debug, dump, m.item_type, n.data_addr(), path.index(i));
                 n = n.next(dump);
                 i += 1;
             }
@@ -148,7 +158,7 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             let mut i = 0;
             while !n.is_nil()
             {
-                visit_type(depth, debug, dump, m.item_type, n.data_addr(), path.index(i));
+                visit_type(depth+1, debug, dump, m.item_type, n.data_addr(), path.index(i));
                 n = n.next(dump);
                 i += 1;
             }
@@ -171,7 +181,7 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             else {
                 let f = &d_u.fields[tag-1];
                 let ty = debug.get_type(&f.ty);
-                visit_type(depth, debug, dump, ty, addr + d_o, path.field(&f.name));
+                visit_type(depth+1, debug, dump, ty, addr + d_o, path.field(&f.name));
             }
             for f in composite_type.iter_fields().skip(2) {
                 visit_type(depth+1, debug, dump, &debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
@@ -204,7 +214,8 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
     }
 }
 
-/// Is this type a mrustc TAGGED_UNION? Returns the offset of the tag and data, and the inner union
+/// Is this type a mrustc `TAGGED_UNION`
+/// Returns the offset of the tag and data, and the inner union
 fn is_mrustc_tagged_union<'d>(debug: &'d debug_info::DebugPool, composite_type: &debug_info::CompositeType) -> Option<(u64, u64, &'d debug_info::CompositeType)> {
     if composite_type.fields.len() >= 2
         && composite_type.fields[0].name == "m_tag"
