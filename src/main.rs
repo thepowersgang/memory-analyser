@@ -165,25 +165,14 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             return ;
         }
 
-        // TODO: detect mrustc tagged unions (check for m_tag and m_data fields)
-        if let Some((t_o, d_o, d_u)) = is_mrustc_tagged_union(debug, composite_type) {
+        if let Some(tu) = type_handlers::MrustcTaggedUnion::opt_read(debug, dump, ty, addr) {
             if false {
                 print!("TU: "); dump_type_fields(debug, ty, 0); println!("");
             }
-            let tag = dump.read_u32(addr + t_o) as usize;
-            if tag == 0 {
-                //TAGDEAD
+            if let Some((name,ty)) = tu.variant {
+                visit_type(depth+1, debug, dump, ty, addr + tu.data_ofs, path.field(name));
             }
-            else if tag > d_u.fields.len() {
-                panic!("Invalid tagged union: tag out of range {:#x} > {} ({})", tag, d_u.fields.len(), path);
-                //return ;
-            }
-            else {
-                let f = &d_u.fields[tag-1];
-                let ty = debug.get_type(&f.ty);
-                visit_type(depth+1, debug, dump, ty, addr + d_o, path.field(&f.name));
-            }
-            for f in composite_type.iter_fields().skip(2) {
+            for f in tu.other_fields {
                 visit_type(depth+1, debug, dump, &debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
             }
             return ;
@@ -211,25 +200,5 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             }
         }
     },
-    }
-}
-
-/// Is this type a mrustc `TAGGED_UNION`
-/// Returns the offset of the tag and data, and the inner union
-fn is_mrustc_tagged_union<'d>(debug: &'d debug_info::DebugPool, composite_type: &debug_info::CompositeType) -> Option<(u64, u64, &'d debug_info::CompositeType)> {
-    if composite_type.fields.len() >= 2
-        && composite_type.fields[0].name == "m_tag"
-        && composite_type.fields[1].name == "m_data"
-    {
-        let d_ty = resolve_alias_chain(debug, debug.get_type(&composite_type.fields[1].ty));
-        let debug_info::Type::Union(u) = d_ty else { return None };
-        Some((
-            composite_type.fields[0].offset,
-            composite_type.fields[1].offset,
-            u
-        ))
-    }
-    else {
-        None
     }
 }

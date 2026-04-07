@@ -262,3 +262,48 @@ impl CppUnorderedMapNode {
         Self::read(dump, next_addr, self.data_ofs)
     }
 }
+
+/// A mrustc `TAGGED_UNION` structure
+pub struct MrustcTaggedUnion<'d> {
+    /// Offset to the data, relative to the passed `addr`
+    pub data_ofs: u64,
+    /// Name and data type of the current variant
+    pub variant: Option<(&'d str, &'d Type)>,
+    /// Other data fields on the union (`TAGGED_UNION_EX` can add methods and data)
+    pub other_fields: &'d [super::debug_info::CompositeField],
+}
+impl<'d> MrustcTaggedUnion<'d> {
+    pub fn opt_read(debug: &'d DebugPool, dump: &CoreDump, ty: &'d Type, addr: u64) -> Option<Self> {
+        let Type::Struct(composite_type) = ty else {
+            return None;
+        };
+        if !(composite_type.fields.len() >= 2
+            && composite_type.fields[0].name == "m_tag"
+            && composite_type.fields[1].name == "m_data"
+            ) {
+            return None;
+        }
+        let d_ty = resolve_alias_chain(debug, debug.get_type(&composite_type.fields[1].ty));
+        let Type::Union(d_u) = d_ty else { return None };
+        let t_o = composite_type.fields[0].offset;
+        let d_o = composite_type.fields[1].offset;
+        let tag = dump.read_u32(addr + t_o) as usize;
+        let variant = if tag == 0 {
+                None
+            }
+            else if tag > d_u.fields.len() {
+                println!("Invalid tagged union: tag out of range {:#x} > {}", tag, d_u.fields.len());
+                None
+            }
+            else {
+                let f = &d_u.fields[tag-1];
+                let ty = debug.get_type(&f.ty);
+                Some((&f.name[..], ty))
+            };
+        Some(MrustcTaggedUnion {
+            data_ofs: d_o,
+            variant,
+            other_fields: &composite_type.fields[2..]
+        })
+    }
+}
