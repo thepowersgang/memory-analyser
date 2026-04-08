@@ -58,6 +58,8 @@ pub struct DebugPool {
     type_name_map: ::std::collections::HashMap<String, Vec<(bool, TypeRef)>>,
     /// Mapping between equivalent types to the canonical type
     type_remap: ::std::collections::HashMap<TypeRef, TypeRef>,
+
+    symbols: ::std::collections::BTreeMap<u64,Vec<(u64, String)>>,
 }
 impl DebugPool {
     pub fn new() -> Self {
@@ -105,8 +107,26 @@ impl DebugPool {
             Ok(::gimli::EndianSlice::new(section_data, ::gimli::LittleEndian))
         })?;
         self.add_variables_types_from_dwarf(base, &debug_info);
+        // Get vtables from symbol table
+        if let Some(f) = elf_files.file_debug.as_ref() {
+            self.add_from_symbtab(base, f)?;
+        }
+        self.add_from_symbtab(base, &elf_files.file_main)?;
         println!("LOADED {}", path.display());
         Ok( () )
+    }
+    fn add_from_symbtab(&mut self, base: u64, elf: &::elf::ElfBytes<::elf::endian::NativeEndian>) -> Result<(),Box<dyn ::std::error::Error>> {
+        if let Some((symtab, strtab)) = elf.symbol_table()? {
+            for sym in symtab.iter() {
+                if ! sym.is_undefined() {
+                    self.symbols.entry(base + sym.st_value).or_default().push((
+                        sym.st_size,
+                        strtab.get(sym.st_name as usize).unwrap().to_owned(),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
     
     pub fn index_types(&mut self) {
@@ -135,6 +155,27 @@ impl DebugPool {
                 self.type_remap.insert(*t, target);
             }
         }
+    }
+
+    pub fn find_type_by_vtable(&self, addr: u64) -> Option<&Type> {
+        if let Some((&a, v)) = self.symbols.iter().min_by_key(|v| v.0.abs_diff(addr)) {
+            for &(s, ref n) in v {
+                if a <= addr && addr < a + s {
+                    if n.starts_with("_ZTV") {
+                        let dm = ::cpp_demangle::Symbol::new(&n[..]).unwrap();
+                        let dm = dm.demangle().unwrap();
+                        assert!(dm.starts_with("{vtable("));
+                        assert!(dm.ends_with(")}"));
+                        let dm = &dm[8..dm.len()-2];
+                        let Some(t) = self.type_name_map.get(dm) else {
+                            panic!("No type named {} (from {})", dm, n);
+                        };
+                        return Some(self.get_type(&t[0].1));
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn get_unwind<'ctxt>(&self, ctx: &'ctxt mut ::gimli::UnwindContext<usize>, address: u64) -> Option<&'ctxt ::gimli::UnwindTableRow<usize>> {

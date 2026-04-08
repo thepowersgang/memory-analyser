@@ -109,11 +109,34 @@ fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u
 }
 
 fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64, path: Path) {
-    // TODO: if the last entry in the path is a deref, or is the root - then get the direct size of this type and add to total used
     let ty = resolve_alias_chain(debug, ty);
-    println!("{:depth$}{ty} @ {addr:#x} ({path})", "", ty=debug.fmt_type(ty));
 
-    // TODO: Forward-declared structs are empty, but the filled version should still exist. Need to match the two together (by name?)
+    // Handle virtual types by detecting the presense of a vtable field, then looking up its value
+    let ty = if let debug_info::Type::Struct(ct) = ty {
+        if ct.fields.len() > 0 && ct.fields[0].name.starts_with("_vptr.") {
+            let vptr = dump.read_ptr(addr + ct.fields[0].offset);
+            if let Some(ty) = debug.find_type_by_vtable(vptr) {
+                //println!("{:depth$}>>{ty}", "", ty=debug.fmt_type(ty));
+                ty
+            }
+            else {
+                println!("FAILED TO FIND VTABLE: {:#x}", vptr);
+                ty
+            }
+        }
+        else {
+            ty
+        }
+    }
+    else {
+        ty
+    };
+    println!("{:depth$}{ty} @ {addr:#x} ({path})", "", ty=debug.fmt_type(ty));
+    // if the last entry in the path is a deref, or is the root - then get the direct size of this type and add to total used
+    if path.is_root_or_deref() {
+        // Get size of this type, and return it (also claim ownership of the memory range)
+        //output.claim(addr, size, ty);
+    }
 
     match ty {
     debug_info::Type::Alias(_) => panic!("Should be resolved above"),
@@ -182,15 +205,20 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
             return ;
         }
 
-        for (i,(ofs,ty)) in composite_type.parents().enumerate() {
-            visit_type(depth+1, debug, dump, &debug.get_type(ty), addr + ofs, path.parent(i));
+        fn visit_ct_inner(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, composite_type: &debug_info::CompositeType, addr: u64, path: Path) {
+            for (i,(ofs,ty)) in composite_type.parents().enumerate() {
+                let debug_info::Type::Struct(ct) = debug.get_type(ty) else { panic!("Parent type not a struct"); };
+                println!("{:depth$}{ty} @ {addr:#x} ({path})", "", depth=depth+1, addr=addr+ofs, ty=ct.name(), path=path.parent(i));
+                visit_ct_inner(depth+1, debug, dump, ct, addr + ofs, path.parent(i));
+            }
+            for f in composite_type.iter_fields() {
+                visit_type(depth+1, debug, dump, &debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
+            }
         }
-        for f in composite_type.iter_fields() {
-            visit_type(depth+1, debug, dump, &debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
-        }
+        visit_ct_inner(depth, debug, dump, composite_type, addr, path)
     },
     debug_info::Type::Union(composite_type) => {
-        todo!("Found union, needs handling: {:?}", composite_type.name());
+        println!("Not recursing into union: {:?}", composite_type.name());
     },
     debug_info::Type::Array(..) => todo!("visit_type: array"),
     debug_info::Type::Enum(_) => {},

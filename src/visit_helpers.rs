@@ -19,6 +19,15 @@ impl<'a> Path<'a> {
             node,
         }
     }
+
+    pub fn is_root_or_deref(&self) -> bool {
+        match self.node {
+        PathNode::Null => true,
+        PathNode::Deref => true,
+        _ => false,
+        }
+    }
+
     /// Indexing of an array/vector or pointer
     pub fn index(&self, index: usize) -> Path<'_> {
         self.add(PathNode::Index(index))
