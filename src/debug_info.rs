@@ -51,6 +51,13 @@ pub struct DebugPool {
     backtrace_data: Vec<(u64, u64, BacktraceType,)>,
     types: Vec<Option<Type>>,
     next_unit_index: usize,
+
+    /// A map from type name to all `TypeRef`s of that type, sorted such that populated types come first
+    /// 
+    /// Primarily used to get fully-defined types for forward-declared/empty types
+    type_name_map: ::std::collections::HashMap<String, Vec<(bool, TypeRef)>>,
+    /// Mapping between equivalent types to the canonical type
+    type_remap: ::std::collections::HashMap<TypeRef, TypeRef>,
 }
 impl DebugPool {
     pub fn new() -> Self {
@@ -100,6 +107,34 @@ impl DebugPool {
         self.add_variables_types_from_dwarf(base, &debug_info);
         println!("LOADED {}", path.display());
         Ok( () )
+    }
+    
+    pub fn index_types(&mut self) {
+        self.type_name_map.clear();
+        for (i,t) in self.types.iter().enumerate() {
+            if let Some(t) = t {
+                let is_complete = match t {
+                    Type::Struct(composite_type)|Type::Union(composite_type) => {
+                        !(composite_type.fields.is_empty() && composite_type.parents.is_empty())
+                    },
+                    Type::Enum(_) => true,  // TODO: enums might still be incomplete
+                    Type::Alias(..)
+                    |Type::Primtive(..)
+                    |Type::Pointer(..)
+                    |Type::Array(..) => true,
+                };
+                self.type_name_map.entry(format!("{}", self.fmt_type(t))).or_default().push((is_complete, TypeRef(i)));
+            }
+        }
+        for tys in self.type_name_map.values_mut() {
+            // Sort so complete versions with lower TypeRef values come first
+            tys.sort_by_key(|(complete,ty)| (!*complete, ty.0));
+
+            let target = tys[0].1;
+            for (_,t) in tys.iter().skip(1) {
+                self.type_remap.insert(*t, target);
+            }
+        }
     }
 
     fn get_unwind<'ctxt>(&self, ctx: &'ctxt mut ::gimli::UnwindContext<usize>, address: u64) -> Option<&'ctxt ::gimli::UnwindTableRow<usize>> {
@@ -243,6 +278,7 @@ impl DebugPool {
     }
     #[track_caller]
     pub fn get_type(&self, ty: &TypeRef) -> &Type {
+        let ty = self.type_remap.get(ty).unwrap_or(ty);
         match self.types[ty.0] {
         Some(ref v) => v,
         None => panic!("Type not populated: {:?} = {:?}", ty, self.type_lookup.iter().find(|(_,v)| v.0 == ty.0)),
@@ -384,7 +420,7 @@ enum VariablePosition {
 }
 
 /// Reference to a type in the debug tree
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq)]
 #[derive(Debug)]
 pub struct TypeRef(usize);
 

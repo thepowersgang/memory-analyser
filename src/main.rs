@@ -63,6 +63,7 @@ fn main() {
         Err(e) => panic!("Failed to load {:?}: {:?}", module_path, e),
         }
     }
+    debug.index_types();
     
     let state_in_dump = dump.get_thread(0);
     println!("STATE: {}", state_in_dump);
