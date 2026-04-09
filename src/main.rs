@@ -71,7 +71,15 @@ fn main() {
     println!("STATE: {}", state_main);
 
     let (addr, ty) = debug.get_variable(&state_main, &dump, "crate");
-    visit_type(0, &debug, &dump, &debug.get_type(&ty), addr, Path::root());
+    let mut output = Output {
+        debug: &debug,
+        dump: &dump,
+        usage: Default::default(),
+        used_memory: Default::default(),
+    };
+    visit_type(&mut output, 0, debug.get_type(&ty), addr, Path::root());
+    eprintln!("{:#?}", output.usage);
+    eprintln!("{} KiB covered", output.used_memory.calculate_usage() / 1024)
 }
 
 /// Dump the immediate fields of a structure (all direct data)
@@ -108,14 +116,87 @@ fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u
     }
 }
 
-fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, ty: &debug_info::Type, addr: u64, path: Path) {
-    let ty = resolve_alias_chain(debug, ty);
+#[derive(Default)]
+struct SparseBitmap {
+    /// [16] bytes per bit, 1024 entries (8KiB) per chunk = 1024*64*16 (1MiB) covered per chunk
+    chunks: ::std::collections::BTreeMap<u64, Vec<u64>>,
+}
+impl SparseBitmap {
+    fn mark_area(&mut self, base: u64, len: u64) {
+        /// 16 byte coverage calculation atom
+        const COVERAGE_PER_BIT: usize = 16;
+        /// 1024 units per `Vec<u64>` (for 64k units)
+        const CHUNK_SIZE_ENTS: usize = 1024;
+        const CHUNK_SIZE_BITS: usize = CHUNK_SIZE_ENTS * 64;
+        //const CHUNK_COVERAGE_BYTES: usize = CHUNK_SIZE_BITS * COVERAGE_PER_BIT;
+        let b0 = base / COVERAGE_PER_BIT as u64;
+        let bn = (base + len + (COVERAGE_PER_BIT - 1) as u64) / COVERAGE_PER_BIT as u64;
+        for b in b0 .. bn {
+            let (ci,bit) = (b / CHUNK_SIZE_BITS as u64, b as usize % CHUNK_SIZE_BITS);
+            let c = self.chunks.entry(ci).or_insert_with(|| vec![0; CHUNK_SIZE_ENTS]);
+            c[bit / 64] |= 1 << (bit % 64);
+        }
+    }
+
+    fn calculate_usage(&self) -> usize {
+        let mut n_units = 0;
+        for c in self.chunks.values() {
+            for v in c {
+                n_units += v.count_ones() as usize;
+            }
+        }
+        n_units * 16
+    }
+}
+
+struct Output<'a> {
+    debug: &'a debug_info::DebugPool,
+    dump: &'a core_dump::CoreDump,
+    /// Memory usage associated with various paths through memory (think `du`'s output)
+    usage: ::std::collections::BTreeMap<String, u64>,
+    // TODO: (sparse) Bitmap of used memory
+    used_memory: SparseBitmap,
+}
+impl Output<'_> {
+    /// Annotate the existence of a top-level type at a location (records memory usage)
+    fn claim(&mut self, path: &Path, addr: u64, ty: &debug_info::Type) {
+        // Get the size of this type
+        let size = self.debug.size_of(ty) as u64;
+        self.claim_raw(path, addr, size, true);
+    }
+    fn claim_raw(&mut self, path: &Path, addr: u64, size: u64, assoc: bool) {
+        // Mark it as used in the memory map
+        self.used_memory.mark_area(addr, size);
+
+        if !assoc {
+            return ;
+        }
+
+        // Associate the used memory
+        if path.len() > 0 {
+            *self.usage.entry(String::new()).or_default() += size;
+        }
+        let mut path = path.get_prefix(3);
+        loop {
+            *self.usage.entry(format!("{}", path)).or_default() += size;
+            if let Some(p) = path.get_parent() {
+                path = p;
+            }
+            else {
+                break;
+            }
+        }
+    }
+}
+
+fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path) {
+    let ty = resolve_alias_chain(output.debug, ty);
 
     // Handle virtual types by detecting the presense of a vtable field, then looking up its value
     let ty = if let debug_info::Type::Struct(ct) = ty {
         if ct.fields.len() > 0 && ct.fields[0].name.starts_with("_vptr.") {
-            let vptr = dump.read_ptr(addr + ct.fields[0].offset);
-            if let Some(ty) = debug.find_type_by_vtable(vptr) {
+            let vptr = output.dump.read_ptr(addr + ct.fields[0].offset);
+            if let Some(ty) = output.debug.find_type_by_vtable(vptr) {
                 //println!("{:depth$}>>{ty}", "", ty=debug.fmt_type(ty));
                 ty
             }
@@ -131,11 +212,11 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
     else {
         ty
     };
-    println!("{:depth$}{ty} @ {addr:#x} ({path})", "", ty=debug.fmt_type(ty));
+    println!("{:depth$}{ty} @ {addr:#x} ({path})", "", ty=output.debug.fmt_type(ty));
     // if the last entry in the path is a deref, or is the root - then get the direct size of this type and add to total used
     if path.is_root_or_deref() {
         // Get size of this type, and return it (also claim ownership of the memory range)
-        //output.claim(addr, size, ty);
+        output.claim(&path, addr, ty);
     }
 
     match ty {
@@ -144,78 +225,83 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
 
         if composite_type.name() == "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >" {
             // TODO: Get string data, and check for duplicates?
+            //output.claim(path, base, end - base);
             return ;
         }
-        if let Some(p) = type_handlers::CppUniquePtr::opt_read(debug, dump, ty, addr) {
+        if let Some(p) = type_handlers::CppUniquePtr::opt_read(output.debug, output.dump, ty, addr) {
             if p.target_addr != 0 {
-                visit_type(depth+1, debug, dump, p.target_ty, p.target_addr, path.deref());
+                visit_type(output, depth+1, p.target_ty, p.target_addr, path.deref());
             }
             return ;
         }
-        if let Some(p) = type_handlers::CppSharedPtr::opt_read(debug, dump, ty, addr) {
+        if let Some(p) = type_handlers::CppSharedPtr::opt_read(output.debug, output.dump, ty, addr) {
             if p.target_addr != 0 {
-                visit_type(depth+1, debug, dump, p.target_ty, p.target_addr, path.field("data").deref());
+                visit_type(output, depth+1, p.target_ty, p.target_addr, path.field("data").deref());
             }
             if p.count_addr != 0 {
-                visit_type(depth+1, debug, dump, p.count_ty, p.count_addr, path.field("refcount").deref());
+                output.claim(&path.field("refcount").deref(), p.count_addr, p.count_ty);
+                visit_type(output, depth+1, p.count_ty, p.count_addr, path.field("refcount").deref());
             }
             return ;
         }
-        if let Some(v) = type_handlers::CppVector::opt_read(debug, dump, ty, addr) {
-            let inner_size = debug.size_of(v.item_ty);
+        if let Some(v) = type_handlers::CppVector::opt_read(output.debug, output.dump, ty, addr) {
+            let inner_size = output.debug.size_of(v.item_ty);
             assert!(v.begin <= v.end && v.end <= v.alloc_end);
             for (i,a) in (v.begin .. v.end).step_by(inner_size).enumerate() {
-                visit_type(depth+1, debug, dump, v.item_ty, a, path.index(i));
+                output.claim(&path.index(i), a, v.item_ty);
+                visit_type(output, depth+1, v.item_ty, a, path.index(i));
             }
             return ;
         }
-        if let Some(m) = type_handlers::CppMap::opt_read(debug, dump, ty, addr) {
+        if let Some(m) = type_handlers::CppMap::opt_read(output.debug, output.dump, ty, addr) {
             let mut n = m.cur_node;
             let mut i = 0;
             while !n.is_nil()
             {
-                visit_type(depth+1, debug, dump, m.item_type, n.data_addr(), path.index(i));
-                n = n.next(dump);
+                output.claim(&path.index(i), n.data_addr(), m.item_type);
+                visit_type(output, depth+1, m.item_type, n.data_addr(), path.index(i));
+                n = n.next(output.dump);
                 i += 1;
             }
             return ;
         }
-        if let Some(m) = type_handlers::CppUnorderedMap::opt_read(debug, dump, ty, addr) {
+        if let Some(m) = type_handlers::CppUnorderedMap::opt_read(output.debug, output.dump, ty, addr) {
             let mut n = m.first_node;
             let mut i = 0;
             while !n.is_nil()
             {
-                visit_type(depth+1, debug, dump, m.item_type, n.data_addr(), path.index(i));
-                n = n.next(dump);
+                output.claim(&path.index(i), n.data_addr(), m.item_type);
+                visit_type(output, depth+1, m.item_type, n.data_addr(), path.index(i));
+                n = n.next(output.dump);
                 i += 1;
             }
             return ;
         }
 
-        if let Some(tu) = type_handlers::MrustcTaggedUnion::opt_read(debug, dump, ty, addr) {
+        if let Some(tu) = type_handlers::MrustcTaggedUnion::opt_read(output.debug, output.dump, ty, addr) {
             if false {
-                print!("TU: "); dump_type_fields(debug, ty, 0); println!("");
+                print!("TU: "); dump_type_fields(output.debug, ty, 0); println!("");
             }
             if let Some((name,ty)) = tu.variant {
-                visit_type(depth+1, debug, dump, ty, addr + tu.data_ofs, path.field(name));
+                visit_type(output, depth+1, ty, addr + tu.data_ofs, path.field(name));
             }
             for f in tu.other_fields {
-                visit_type(depth+1, debug, dump, &debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
+                visit_type(output, depth+1, &output.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
             }
             return ;
         }
 
-        fn visit_ct_inner(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::CoreDump, composite_type: &debug_info::CompositeType, addr: u64, path: Path) {
+        fn visit_ct_inner(output: &mut Output, depth: usize, composite_type: &debug_info::CompositeType, addr: u64, path: Path) {
             for (i,(ofs,ty)) in composite_type.parents().enumerate() {
-                let debug_info::Type::Struct(ct) = debug.get_type(ty) else { panic!("Parent type not a struct"); };
+                let debug_info::Type::Struct(ct) = output.debug.get_type(ty) else { panic!("Parent type not a struct"); };
                 println!("{:depth$}{ty} @ {addr:#x} ({path})", "", depth=depth+1, addr=addr+ofs, ty=ct.name(), path=path.parent(i));
-                visit_ct_inner(depth+1, debug, dump, ct, addr + ofs, path.parent(i));
+                visit_ct_inner(output, depth+1, ct, addr + ofs, path.parent(i));
             }
             for f in composite_type.iter_fields() {
-                visit_type(depth+1, debug, dump, &debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
+                visit_type(output, depth+1, output.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
             }
         }
-        visit_ct_inner(depth, debug, dump, composite_type, addr, path)
+        visit_ct_inner(output, depth, composite_type, addr, path)
     },
     debug_info::Type::Union(composite_type) => {
         println!("Not recursing into union: {:?}", composite_type.name());
@@ -224,11 +310,11 @@ fn visit_type(depth: usize, debug: &debug_info::DebugPool, dump: &core_dump::Cor
     debug_info::Type::Enum(_) => {},
     debug_info::Type::Primtive(_) => {},
     debug_info::Type::Pointer(dst_ty) => {
-        let addr = dump.read_ptr(addr);
+        let addr = output.dump.read_ptr(addr);
         println!("{:depth$}->{:#x}", "", addr);
         if addr != 0 {
             if false {
-                visit_type(depth+1, debug, dump, &debug.get_type(dst_ty), addr, path.deref());
+                visit_type(output, depth+1, output.debug.get_type(dst_ty), addr, path.deref());
             }
         }
     },

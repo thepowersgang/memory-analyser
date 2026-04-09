@@ -20,6 +20,29 @@ impl<'a> Path<'a> {
         }
     }
 
+    pub fn len(&self) -> usize {
+        match self.parent {
+        Some(p) => 1 + p.len(),
+        None => match self.node
+            {
+            PathNode::Null => 0,
+            _ => 1,
+            },
+        }
+    }
+    pub fn get_parent(&self) -> Option<&'a Path<'a>> {
+        self.parent
+    }
+    pub fn get_prefix(&'a self, len: usize) -> &'a Path<'a> {
+        let l = self.len();
+        let n_pop = l.saturating_sub(len);
+        let mut v = self;
+        for _ in 0 .. n_pop {
+            v = v.parent.unwrap();
+        }
+        v
+    }
+
     pub fn is_root_or_deref(&self) -> bool {
         match self.node {
         PathNode::Null => true,
