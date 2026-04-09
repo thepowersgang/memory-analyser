@@ -79,7 +79,7 @@ fn main() {
     };
     visit_type(&mut output, 0, debug.get_type(&ty), addr, Path::root());
     eprintln!("{:#?}", output.usage);
-    eprintln!("{} KiB covered", output.used_memory.calculate_usage() / 1024)
+    eprintln!("{} KiB covered (out of {} KiB)", output.used_memory.calculate_usage() / 1024, dump.anon_size() / 1024)
 }
 
 /// Dump the immediate fields of a structure (all direct data)

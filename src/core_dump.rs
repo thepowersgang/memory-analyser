@@ -31,6 +31,9 @@ struct MemoryRange {
     _file_ofs: u64,
     ///// Source file
     //file_path: String,
+
+    /// Indicates that this is an anonoymous binding (i.e. no backing file, i.e. it's dynamic memory)
+    is_anon: bool,
 }
 impl CoreDump {
     pub fn new_stub() -> CoreDump {
@@ -88,6 +91,7 @@ impl CoreDump {
                 first_chunk: n_chunks,
                 size: hdr.size,
                 v_start: hdr.v_start,
+                is_anon: name.is_empty(),
             });
             n_chunks += (next_chunk - this_chunk) as usize;
 
@@ -156,6 +160,11 @@ impl CoreDump {
             file_chunks,
             threads,
         })
+    }
+
+    /// Sum the size of all anon (no backing file) mappings
+    pub fn anon_size(&self) -> usize {
+        self.memory_ranges.iter().map(|v| if v.is_anon { v.size } else { 0 }).sum::<u64>() as usize
     }
 
     pub fn modules(&self) -> impl Iterator<Item=(::std::path::PathBuf,u64,u64)> {
