@@ -76,6 +76,7 @@ fn main() {
         dump: &dump,
         usage: Default::default(),
         used_memory: Default::default(),
+        shared_pointers: Default::default(),
     };
     visit_type(&mut output, 0, debug.get_type(&ty), addr, Path::root());
     eprintln!("{:#?}", output.usage);
@@ -156,6 +157,8 @@ struct Output<'a> {
     usage: ::std::collections::BTreeMap<String, u64>,
     // TODO: (sparse) Bitmap of used memory
     used_memory: SparseBitmap,
+    /// Set of seen shared pointers (any sort of shared pointer, not just `std::shared_ptr`)
+    shared_pointers: ::std::collections::BTreeSet<u64>,
 }
 impl Output<'_> {
     /// Annotate the existence of a top-level type at a location (records memory usage)
@@ -247,11 +250,10 @@ fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u6
             return ;
         }
         if let Some(p) = type_handlers::CppSharedPtr::opt_read(output.debug, output.dump, ty, addr) {
-            if p.target_addr != 0 {
+            if p.target_addr != 0 && output.shared_pointers.insert(p.target_addr) {
                 visit_type(output, depth+1, p.target_ty, p.target_addr, path.field("data").deref());
             }
-            if p.count_addr != 0 {
-                output.claim(&path.field("refcount").deref(), p.count_addr, p.count_ty);
+            if p.count_addr != 0 && output.shared_pointers.insert(p.count_addr) {
                 visit_type(output, depth+1, p.count_ty, p.count_addr, path.field("refcount").deref());
             }
             return ;
@@ -301,6 +303,46 @@ fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u6
                 visit_type(output, depth+1, &output.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
             }
             return ;
+        }
+
+        fn rc_ptr(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path, ptr_path: Path) {
+            let (ptr_o,ptr_ty) = visit_helpers::get_field(output.debug, ty, &ptr_path);
+            let ptr_t = output.debug.get_type(&ptr_ty);
+            let debug_info::Type::Pointer(inner_ty, _) = ptr_t else { panic!("Expected pointer, got  {:?}", ptr_t); };
+            let inner_ty = output.debug.get_type(inner_ty);
+            let ptr_val = output.dump.read_ptr(addr + ptr_o);
+            if ptr_val != 0 && output.shared_pointers.insert(ptr_val) {
+                visit_type(output, depth+1, inner_ty, ptr_val, path.deref());
+            }
+        }
+        fn unique_ptr(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path, ptr_path: Path) {
+            let (ptr_o,ptr_ty) = visit_helpers::get_field(output.debug, ty, &ptr_path);
+            let ptr_t = output.debug.get_type(&ptr_ty);
+            let debug_info::Type::Pointer(inner_ty, _) = ptr_t else { panic!("Expected pointer, got  {:?}", ptr_t); };
+            let inner_ty = output.debug.get_type(inner_ty);
+            let ptr_val = output.dump.read_ptr(addr + ptr_o);
+            if ptr_val != 0 {
+                visit_type(output, depth+1, inner_ty, ptr_val, path.deref());
+            }
+        }
+        // Some mrustc special types
+        match composite_type.name() {
+        // interned string type, ignore for now (TODO: Look for duplicates)
+        "RcString" => {},
+        // `Span`: A fixed-size reference-counted type
+        "Span" => return rc_ptr(output, depth, ty, addr, path, Path::root().field("m_ptr")),
+        // --- Various fixed-size smart pointers ---
+        | "MIR::FunctionPointer"
+        | "HIR::ExprStatePtr"
+        | "HIR::ExprPtrInner"
+            => return unique_ptr(output, depth, ty, addr, path, Path::root().field("ptr")),
+        | "EncodedLiteralPtr"
+        | "MIR::EnumCachePtr"
+            => return unique_ptr(output, depth, ty, addr, path, Path::root().field("p")),
+        | "MacroRulesPtr"
+        | "HIR::CratePtr"
+            => return unique_ptr(output, depth, ty, addr, path, Path::root().field("m_ptr")),
+        _ => {},
         }
 
         fn visit_ct_inner(output: &mut Output, depth: usize, composite_type: &debug_info::CompositeType, addr: u64, path: Path) {
