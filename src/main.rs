@@ -223,9 +223,21 @@ fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u6
     debug_info::Type::Alias(_) => panic!("Should be resolved above"),
     debug_info::Type::Struct(composite_type) => {
 
-        if composite_type.name() == "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >" {
+        if let Some(s) = type_handlers::CppString::opt_read(output.debug, output.dump, ty, addr) {
             // TODO: Get string data, and check for duplicates?
-            //output.claim(path, base, end - base);
+            if s.ptr != 0 {
+                let mut buf = [0; 16];
+                let l = (s.len as usize).min(buf.len());
+                let buf = &mut buf[..l];
+                output.dump.read_bytes(s.ptr, buf);
+                println!("{:depth$}{} = {:?}{} (c={})", "", path.deref(), ByteStr(buf), if l < s.len as usize { "..." } else { "" }, s.capacity);
+            }
+            if s.capacity == 0 {
+                // Inline string, so don't claim the memory (buffer already claimed)
+            }
+            else {
+                output.claim_raw(&path.deref(), s.ptr, s.len - s.ptr, true);
+            }
             return ;
         }
         if let Some(p) = type_handlers::CppUniquePtr::opt_read(output.debug, output.dump, ty, addr) {
@@ -318,5 +330,25 @@ fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u6
             }
         }
     },
+    }
+}
+
+
+struct ByteStr<'a>(&'a[u8]);
+impl ::std::fmt::Debug for ByteStr<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("\"")?;
+        for &b in self.0 {
+            match b {
+            0 => f.write_str("\\0"),
+            b'\t' => f.write_str("\\t"),
+            b'\n' => f.write_str("\\n"),
+            b'\r' => f.write_str("\\r"),
+            b'"' => f.write_str("\\\""),
+            0x20..0x7F => write!(f, "{}", b as char),
+            _ => write!(f, "\\x{:02X}", b),
+            }?
+        }
+        f.write_str("\"")
     }
 }

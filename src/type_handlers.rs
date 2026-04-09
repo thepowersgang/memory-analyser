@@ -99,6 +99,40 @@ impl<'d> CppVector<'d> {
         })
     }
 }
+pub struct CppString {
+    pub ptr: u64,
+    pub len: u64,
+    /// If zero, the string buffer is stored in the `std::string` itself
+    pub capacity: u64,
+}
+impl CppString {
+    pub fn opt_read(debug: &DebugPool, dump: &CoreDump, ty: &Type, addr: u64) -> Option<Self> {
+        let Type::Struct(composite_type) = ty else {
+            return None;
+        };
+        match composite_type.name() {
+        "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >" => {},
+        _ => return None,
+        }
+        if false {
+            print!("CPP STRING: "); crate::dump_type_fields(debug, ty, 0); println!("");
+        }
+        let ptr = dump.read_ptr(addr + 0);
+        let len = dump.read_ptr(addr + 8);
+        let capacity = if ptr == addr + 0x10 {
+                // Use 0 as a sentinel for inline storage
+                0
+            }
+            else {
+                dump.read_ptr(addr + 16)
+            };
+        Some(CppString {
+            ptr,
+            len,
+            capacity,
+        })
+    }
+}
 
 pub struct CppMap<'d> {
     // the std::pair
