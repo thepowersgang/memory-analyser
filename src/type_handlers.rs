@@ -16,7 +16,7 @@ impl<'d> CppUniquePtr<'d> {
         if composite_type.name().starts_with("std::unique_ptr<") {
             let (o, ptr_ty) = get_field(debug, ty, &Path::root().field("_M_t").parent(0).field("_M_t").parent(0).parent(1).field("_M_head_impl"));
             let ptr_ty = resolve_alias_chain(debug, debug.get_type(&ptr_ty));
-            let Type::Pointer(inner_ty) = ptr_ty else { panic!("Expected pointer") };
+            let Type::Pointer(inner_ty, _) = ptr_ty else { panic!("Expected pointer") };
             let inner_ty = resolve_alias_chain(debug, debug.get_type(&inner_ty));
 
             Some(CppUniquePtr {
@@ -48,12 +48,12 @@ impl<'d> CppSharedPtr<'d> {
             let (rc_o, rc_ty) = get_field(debug, ty, &&Path::root().parent(0).field("_M_refcount").field("_M_pi"));
             let inner_ty = {
                 let i = resolve_alias_chain(debug, debug.get_type(&ptr_ty));
-                let Type::Pointer(i) = i else { panic!("Expected pointer") };
+                let Type::Pointer(i, _) = i else { panic!("Expected pointer") };
                 resolve_alias_chain(debug, debug.get_type(&i))
             };
             let rc_ty = {
                 let i = resolve_alias_chain(debug, debug.get_type(&rc_ty));
-                let Type::Pointer(i) = i else { panic!("Expected pointer") };
+                let Type::Pointer(i, _) = i else { panic!("Expected pointer") };
                 resolve_alias_chain(debug, debug.get_type(&i))
             };
 
@@ -88,7 +88,7 @@ impl<'d> CppVector<'d> {
             let (_, ty) = get_field(debug, ty, &Path::root().parent(0).field("_M_impl").parent(1).field("_M_start"));
             let ty = debug.get_type(&ty);
             let ty = resolve_alias_chain(debug, ty);
-            let Type::Pointer(ty) = ty else { panic!("Expected pointer, got {:?}", ty); };
+            let Type::Pointer(ty, _) = ty else { panic!("Expected pointer, got {:?}", ty); };
             *ty
             };
         Some(CppVector {
@@ -215,7 +215,7 @@ impl<'d> CppUnorderedMap<'d> {
             resolve_alias_chain(debug, debug.get_type(&i.sub_types["__node_ptr"]))
         };
         let node_ty = {
-            let Type::Pointer(i) = node_ptr_ty else { panic!("Expected pointer, got {}", debug.fmt_type(node_ptr_ty)) };
+            let Type::Pointer(i, _) = node_ptr_ty else { panic!("Expected pointer, got {}", debug.fmt_type(node_ptr_ty)) };
             resolve_alias_chain(debug, debug.get_type(i))
         };
         let (data_ofs, _) = get_field(debug, node_ty, &Path::root().parent(1).parent(0).field("_M_storage").field("_M_storage").field("__data"));

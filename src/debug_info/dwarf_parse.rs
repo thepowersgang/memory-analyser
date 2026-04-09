@@ -96,7 +96,7 @@ impl super::DebugPool
                                 self.functions.insert(n, fr);
                             } 
                             State::InType(ct, ty, is_union) => {
-                                if true {
+                                if false {
                                     print!("{} {}: {{", if is_union { "union" } else { "struct" }, ct.name);
                                     for f in &ct.fields {
                                         print!(" {}: {:?},", f.name, f.ty);
@@ -188,7 +188,7 @@ impl super::DebugPool
                             let size_bits = v.attr_value(::gimli::DW_AT_byte_size)
                                 .map(|v| v.udata_value().unwrap() * 8)
                                 .or(v.attr_value(::gimli::DW_AT_bit_size).map(|v| v.udata_value().unwrap()));
-                            println!("> {ty_ref:?} base type: {:?}", get_name(&debug_info, &unit, v));
+                            //println!("> {ty_ref:?} base type: {:?}", get_name(&debug_info, &unit, v));
                             self.types[ty_ref.0] = Some(Type::Primtive(super::PrimitiveType {
                                 bits: size_bits.expect("No size?") as u32,
                                 name: get_scoped_name(&stack, "prim", get_name(&debug_info, &unit, v), v.offset),
@@ -199,7 +199,7 @@ impl super::DebugPool
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let target_ty = self.get_typeref_from_attr(unit_index, v);
                             let name = get_name(&debug_info, &unit, v);
-                            println!("> {ty_ref:?} typedef: {:?} ({})", name, get_scoped_name(&stack, "tydef", name, v.offset));
+                            //println!("> {ty_ref:?} typedef: {:?} ({})", name, get_scoped_name(&stack, "tydef", name, v.offset));
                             if let Some(target_ty) = target_ty {
                                 self.types[ty_ref.0] = Some(Type::Alias(target_ty))
                             }
@@ -214,7 +214,7 @@ impl super::DebugPool
                         gimli::DW_TAG_array_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let target_ty = self.get_typeref_from_attr(unit_index, v).expect("No inner type for array");
-                            println!("> {ty_ref:?} array of {:?}", target_ty);
+                            //println!("> {ty_ref:?} array of {:?}", target_ty);
                             self.types[ty_ref.0] = Some(Type::Array(target_ty, 0));
                         },
                         gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => {
@@ -222,7 +222,7 @@ impl super::DebugPool
                             let size = v.attr_value(::gimli::DW_AT_byte_size).map(|v| v.udata_value().expect("not UData")).unwrap_or(0);
                             let name = get_name(&debug_info, &unit, v);
                             let name = get_scoped_name(&stack, "struct", name, v.offset);
-                            println!("> {ty_ref:?} struct: {:?}", name);
+                            //println!("> {ty_ref:?} struct: {:?}", name);
                             stack.push(State::InType(CompositeType::new(name, size as usize), ty_ref, false, ));
                             continue;
                         },
@@ -230,7 +230,7 @@ impl super::DebugPool
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let name = get_name(&debug_info, &unit, v);
                             let name = get_scoped_name(&stack, "enum", name, v.offset);
-                            println!("> {ty_ref:?} enum: {:?}", name);
+                            //println!("> {ty_ref:?} enum: {:?}", name);
                             self.types[ty_ref.0] = Some(Type::Enum(name));
                             continue;
                         },
@@ -239,29 +239,59 @@ impl super::DebugPool
                             let size = v.attr_value(::gimli::DW_AT_byte_size).unwrap().udata_value().expect("not UData");
                             let name = get_name(&debug_info, &unit, v);
                             let name = get_scoped_name(&stack, "union", name, v.offset);
+                            //println!("> {ty_ref:?} union: {:?}", name);
                             stack.push(State::InType(CompositeType::new(name, size as usize), ty_ref, true, ));
                             continue;
                         },
                         gimli::DW_TAG_const_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
-                            println!("> {ty_ref:?} const_type: {:?}", get_name(&debug_info, &unit, v));
+                            let name = get_name(&debug_info, &unit, v);
+                            let target_ty = self.get_typeref_from_attr(unit_index, v);
+                            //println!("> {ty_ref:?} const_type: {name:?} = {target_ty:?}", );
+                            if let Some(target_ty) = target_ty {
+                                self.types[ty_ref.0] = Some(Type::Alias(target_ty))
+                            }
+                            else {
+                                println!("> {ty_ref:?} const_type: {name:?} = {target_ty:?}", );
+                            }
                             continue
                         },
                         gimli::DW_TAG_pointer_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let target_ty = self.get_typeref_from_attr(unit_index, v);
-                            println!("> {ty_ref:?} pointer_type: {:?} = {target_ty:?}", get_name(&debug_info, &unit, v));
+                            //println!("> {ty_ref:?} pointer_type: {:?} = {target_ty:?}", get_name(&debug_info, &unit, v));
                             if let Some(target_ty) = target_ty {
-                                self.types[ty_ref.0] = Some(Type::Pointer(target_ty));
+                                self.types[ty_ref.0] = Some(Type::Pointer(target_ty, super::PointerClass::Bare));
+                            }
+                            else {
+                                println!("> {ty_ref:?} pointer_type: {:?} = {target_ty:?}", get_name(&debug_info, &unit, v));
                             }
                             continue
                         },
                         gimli::DW_TAG_reference_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
-                            println!("> {ty_ref:?} reference type: {:?}", get_name(&debug_info, &unit, v));
+                            let name = get_name(&debug_info, &unit, v);
+                            let target_ty = self.get_typeref_from_attr(unit_index, v);
+                            if let Some(target_ty) = target_ty {
+                                self.types[ty_ref.0] = Some(Type::Pointer(target_ty, super::PointerClass::Reference));
+                            }
+                            else {
+                                println!("> {ty_ref:?} reference type: {name:?} = {target_ty:?}",);
+                            }
                             continue
                         },
-                        gimli::DW_TAG_rvalue_reference_type => {},
+                        gimli::DW_TAG_rvalue_reference_type => {
+                            let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
+                            let name = get_name(&debug_info, &unit, v);
+                            let target_ty = self.get_typeref_from_attr(unit_index, v);
+                            if let Some(target_ty) = target_ty {
+                                self.types[ty_ref.0] = Some(Type::Pointer(target_ty, super::PointerClass::RValueReference));
+                            }
+                            else {
+                                println!("> {ty_ref:?} rvalue reference type: {name:?} = {target_ty:?}",);
+                            }
+                            continue
+                        },
                         _ => {},
                         }
                         match stack.last_mut().unwrap_or(&mut State::Root) {
@@ -365,7 +395,7 @@ impl super::DebugPool
                             gimli::DW_TAG_template_type_parameter => {},
                             gimli::DW_TAG_template_value_parameter => {},
                             gimli::DW_TAG_inheritance => {
-                                println!("in {n:?}: {v:?}", n = ct.name);
+                                //println!("in {n:?}: {v:?}", n = ct.name);
                                 let inner_type = self.get_typeref_from_attr(unit_index, v).expect("No parent type");
                                 let inner_ofs = v.attr_value(::gimli::DW_AT_data_member_location)
                                     .expect("no data_member_location");

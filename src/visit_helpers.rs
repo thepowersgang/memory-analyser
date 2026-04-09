@@ -129,7 +129,7 @@ pub fn get_field(debug: &DebugPool, ty: &Type, path: &Path) -> (u64, TypeRef) {
         },
     Type::Array(_, _) => todo!("array"),
     Type::Primtive(_) => panic!("Getting field of a primitive"),
-    Type::Pointer(_) => todo!("Pointer"),
+    Type::Pointer(..) => todo!("Pointer"),
     Type::Alias(_) => panic!("Alias should be resolved"),
     Type::Enum(_) => panic!("Getting field of an enum"),
     }

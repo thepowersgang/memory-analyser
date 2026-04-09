@@ -309,7 +309,7 @@ fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u6
     debug_info::Type::Array(..) => todo!("visit_type: array"),
     debug_info::Type::Enum(_) => {},
     debug_info::Type::Primtive(_) => {},
-    debug_info::Type::Pointer(dst_ty) => {
+    debug_info::Type::Pointer(dst_ty, _) => {
         let addr = output.dump.read_ptr(addr);
         println!("{:depth$}->{:#x}", "", addr);
         if addr != 0 {

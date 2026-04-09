@@ -330,7 +330,7 @@ impl DebugPool {
         Type::Struct(composite_type) => composite_type.size,
         Type::Union(composite_type) => composite_type.size,
         Type::Primtive(primitive_type) => (primitive_type.bits as usize + 7) / 8,
-        Type::Pointer(_) => 8,
+        Type::Pointer(_,_) => 8,
         Type::Alias(type_ref) => self.size_of(self.get_type(type_ref)),
         Type::Enum(_) => todo!("size_of: enum"),
         Type::Array(inner, count) => if *count == 0 { 0 } else { self.size_of(self.get_type(inner)) * *count },
@@ -358,8 +358,12 @@ impl DebugPool {
         Type::Struct(composite_type) => f.write_str(&composite_type.name),
         Type::Union(composite_type) => f.write_str(&composite_type.name),
         Type::Primtive(primitive_type) => write!(f, "{}[[bits={}]]", primitive_type.name, primitive_type.bits),
-        Type::Pointer(type_ref) => {
-            f.write_str("*")?;
+        Type::Pointer(type_ref, cls) => {
+            match cls {
+            PointerClass::Bare => f.write_str("*")?,
+            PointerClass::Reference => f.write_str("&")?,
+            PointerClass::RValueReference => f.write_str("&& ")?,
+            }
             self.fmt_type_ref_inner(f, type_ref)
         },
         Type::Alias(type_ref) => {
@@ -470,10 +474,20 @@ pub enum Type {
     Struct(CompositeType),
     Union(CompositeType),
     Primtive(PrimitiveType),
-    Pointer(TypeRef),
+    Pointer(TypeRef, PointerClass),
     Alias(TypeRef),
     Enum(String),
     Array(TypeRef, usize),
+}
+
+#[derive(Debug)]
+pub enum PointerClass {
+    // Bog standard pointer
+    Bare,
+    // C++ `Foo&` type
+    Reference,
+    // C++ `Foo&&` type
+    RValueReference,
 }
 #[derive(Debug)]
 pub struct PrimitiveType {
