@@ -153,12 +153,16 @@ impl SparseBitmap {
 struct Output<'a> {
     debug: &'a debug_info::DebugPool,
     dump: &'a core_dump::CoreDump,
+
     /// Memory usage associated with various paths through memory (think `du`'s output)
     usage: ::std::collections::BTreeMap<String, u64>,
-    // TODO: (sparse) Bitmap of used memory
+    /// A sparse bitmap representing used (visited) memory
     used_memory: SparseBitmap,
     /// Set of seen shared pointers (any sort of shared pointer, not just `std::shared_ptr`)
     shared_pointers: ::std::collections::BTreeSet<u64>,
+
+    // TODO: Type instance counts
+    // TODO: Enum variant counts
 }
 impl Output<'_> {
     /// Annotate the existence of a top-level type at a location (records memory usage)

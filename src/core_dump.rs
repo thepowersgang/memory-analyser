@@ -1,3 +1,12 @@
+//! mrustc-specific core dump loader
+//! 
+//! This loader avoids keeping the enitre dump file in memory, although does have to pre-read the entire dump
+//! 
+//! Core dump format:
+//! - A fixed-size header
+//! - Encoded contents of `/proc/self/maps`
+//! - Sequence of zlib compressed memory chunks, only for populated regions of memory
+//!   - Each chunk is prefixed (before the compressed data) by the chunk number (virtual address divided by chunk size)
 
 pub struct CoreDump {
     modules: Vec<ReferencedFile>,
