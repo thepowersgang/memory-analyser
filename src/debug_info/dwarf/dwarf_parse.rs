@@ -1,4 +1,4 @@
-use super::{TypeRef, Type, CompositeType, CompositeField};
+use super::super::{TypeRef, Type, CompositeType, CompositeField};
 use super::{FunctionRecord, PcRanges, PcRange, VariableRecord, VariablePosition, VariableRange};
 
 impl super::DebugPool
@@ -189,7 +189,7 @@ impl super::DebugPool
                                 .map(|v| v.udata_value().unwrap() * 8)
                                 .or(v.attr_value(::gimli::DW_AT_bit_size).map(|v| v.udata_value().unwrap()));
                             //println!("> {ty_ref:?} base type: {:?}", get_name(&debug_info, &unit, v));
-                            self.types[ty_ref.0] = Some(Type::Primtive(super::PrimitiveType {
+                            self.types[ty_ref.0] = Some(Type::Primtive(super::super::PrimitiveType {
                                 bits: size_bits.expect("No size?") as u32,
                                 name: get_scoped_name(&stack, "prim", get_name(&debug_info, &unit, v), v.offset),
                             }));
