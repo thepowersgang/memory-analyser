@@ -22,9 +22,6 @@ struct CpuState {
     gprs: [u64; 16],
 }
 impl CpuState {
-    fn stub() -> Self {
-        CpuState { pc: 0, gprs: [0; 16] }
-    }
     fn get_pc(&self) -> u64 {
         self.pc
     }
@@ -47,13 +44,8 @@ impl ::std::fmt::Display for CpuState {
 }
 
 fn main() {
-    let path = ::std::env::args().nth(1);
-    let dump = if let Some(path) = path {
-        core_dump::CoreDump::open(path.as_ref()).expect("Unable to open core dump")
-    }
-    else {
-        core_dump::CoreDump::new_stub()
-    };
+    let path = ::std::env::args().nth(1).expect("pass a core dump");
+    let dump = core_dump::CoreDump::open(path.as_ref()).expect("Unable to open core dump");
     let mut debug = debug_info::DebugPool::new();
     for (module_path, base, file_base) in dump.modules()
     {
