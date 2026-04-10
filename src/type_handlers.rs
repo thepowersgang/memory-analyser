@@ -341,3 +341,33 @@ impl<'d> MrustcTaggedUnion<'d> {
         })
     }
 }
+
+pub struct MrustcRcString {
+    pub data_addr: u64,
+    pub string_ptr: u64,
+    pub string_len: u64,
+    //pub refcount: u32,
+}
+impl MrustcRcString {
+    pub fn opt_read<'d>(debug: &'d DebugPool, dump: &CoreDump, ty: &'d Type, addr: u64) -> Option<Self> {
+        let Type::Struct(composite_type) = ty else {
+            return None;
+        };
+        if composite_type.name() != "RcString" {
+            return None;
+        }
+        let Type::Pointer(inner_ty,_) = debug.get_type(&composite_type.fields[0].ty) else { panic!() };
+        let inner_ty = debug.get_type(inner_ty);
+        if false {
+            print!("RCSTRING: "); crate::dump_type_fields(debug, inner_ty, 0); println!("");
+        }
+        let (data_ofs, _) = get_field(debug, inner_ty, &Path::root().field("data"));
+        let (size_ofs, _) = get_field(debug, inner_ty, &Path::root().field("size"));
+        let ptr = dump.read_ptr(addr);
+        Some(MrustcRcString {
+            data_addr: ptr,
+            string_ptr: if ptr == 0 { 0 } else { ptr + data_ofs },
+            string_len: if ptr == 0 { 0 } else { dump.read_u32(ptr + size_ofs) as u64 },
+        })
+    }
+}

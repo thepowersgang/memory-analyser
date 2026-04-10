@@ -168,6 +168,7 @@ impl Output<'_> {
         self.claim_raw(path, addr, size, true);
     }
     fn claim_raw(&mut self, path: &Path, addr: u64, size: u64, assoc: bool) {
+        println!("@{} += {}", path, size);
         // Mark it as used in the memory map
         self.used_memory.mark_area(addr, size);
 
@@ -226,14 +227,22 @@ fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u6
     debug_info::Type::Alias(_) => panic!("Should be resolved above"),
     debug_info::Type::Struct(composite_type) => {
 
+        fn read_str<'a>(dump: &core_dump::CoreDump, addr: u64, len: u64, buf: &'a mut [u8]) -> (ByteStr<'a>,&'static str) {
+            let l = (len as usize).min(buf.len());
+            let buf = &mut buf[..l];
+            dump.read_bytes(addr, buf);
+            (
+                ByteStr(buf),
+                if l != len as usize { "..." } else { "" }
+                )
+        }
+
         if let Some(s) = type_handlers::CppString::opt_read(output.debug, output.dump, ty, addr) {
             // TODO: Get string data, and check for duplicates?
             if s.ptr != 0 {
                 let mut buf = [0; 16];
-                let l = (s.len as usize).min(buf.len());
-                let buf = &mut buf[..l];
-                output.dump.read_bytes(s.ptr, buf);
-                println!("{:depth$}{} = {:?}{} (c={})", "", path.deref(), ByteStr(buf), if l < s.len as usize { "..." } else { "" }, s.capacity);
+                let (str,t): (ByteStr<'_>, &str) = read_str(output.dump, s.ptr, s.len, &mut buf);
+                println!("{:depth$}{} = {:?}{} (std::string cap={})", "", path.deref(), str, t, s.capacity);
             }
             if s.capacity == 0 {
                 // Inline string, so don't claim the memory (buffer already claimed)
@@ -305,6 +314,20 @@ fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u6
             return ;
         }
 
+        if let Some(v) = type_handlers::MrustcRcString::opt_read(output.debug, output.dump, ty, addr) {
+            let mut buf = [0; 16];
+            let (s,t) = if v.string_len > 0 {
+                read_str(output.dump, v.string_ptr, v.string_len, &mut buf)
+            } else {
+                (ByteStr(b""),"")
+            };
+            println!("{:depth$}{} = {:?}{} (RcString a={:#x})", "", path.deref(), s, t, v.data_addr);
+            if v.data_addr != 0 && output.shared_pointers.insert(v.data_addr) {
+                output.claim_raw(&path, v.data_addr, output.debug.size_of(ty) as u64 + v.string_len, false);
+            }
+            return ;
+        }
+
         fn rc_ptr(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path, ptr_path: Path) {
             let (ptr_o,ptr_ty) = visit_helpers::get_field(output.debug, ty, &ptr_path);
             let ptr_t = output.debug.get_type(&ptr_ty);
@@ -327,8 +350,8 @@ fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u6
         }
         // Some mrustc special types
         match composite_type.name() {
-        // interned string type, ignore for now (TODO: Look for duplicates)
-        "RcString" => {},
+        // interned string type, ignore for now (TODO: Look for duplicates?)
+        "RcString" => return,
         // `Span`: A fixed-size reference-counted type
         "Span" => return rc_ptr(output, depth, ty, addr, path, Path::root().field("m_ptr")),
         // --- Various fixed-size smart pointers ---
@@ -352,6 +375,10 @@ fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u6
                 visit_ct_inner(output, depth+1, ct, addr + ofs, path.parent(i));
             }
             for f in composite_type.iter_fields() {
+                if f.name.starts_with("_vptr.") {
+                    // Skip VTable pointers
+                    continue ;
+                }
                 visit_type(output, depth+1, output.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
             }
         }
