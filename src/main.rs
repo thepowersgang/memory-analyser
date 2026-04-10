@@ -263,6 +263,7 @@ fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u6
                 visit_type(output, depth+1, p.target_ty, p.target_addr, path.field("data").deref());
             }
             if p.count_addr != 0 && output.shared_pointers.insert(p.count_addr) {
+                //dump_type_fields(output.debug, p.count_ty, 0);
                 visit_type(output, depth+1, p.count_ty, p.count_addr, path.field("refcount").deref());
             }
             return ;
@@ -364,6 +365,7 @@ fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u6
             => return unique_ptr(output, depth, ty, addr, path, Path::root().field("p")),
         | "MacroRulesPtr"
         | "HIR::CratePtr"
+        | "AST::ExprNodeP"
             => return unique_ptr(output, depth, ty, addr, path, Path::root().field("m_ptr")),
         _ => {},
         }
@@ -378,6 +380,10 @@ fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u6
                 if f.name.starts_with("_vptr.") {
                     // Skip VTable pointers
                     continue ;
+                }
+                if composite_type.name().starts_with("std::_Sp_counted_ptr<") && f.name == "_M_ptr" {
+                    // Skip the data pointer stored in shared_ptr's count (avoids even attempting to double-visit)
+                    continue;
                 }
                 visit_type(output, depth+1, output.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
             }
