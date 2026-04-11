@@ -9,7 +9,7 @@
 //!   - Each chunk is prefixed (before the compressed data) by the chunk number (virtual address divided by chunk size)
 
 pub struct CoreDump {
-    modules: Vec<ReferencedFile>,
+    modules: Vec<super::ReferencedFile>,
     memory_ranges: Vec<MemoryRange>,
     
     // NOTE: The virual memory is broken into chunks of `chunk_size`, with empty chunks not stored
@@ -20,11 +20,6 @@ pub struct CoreDump {
     /// Offset of the start of each chunk
     file_chunks: Vec<u64>,
     chunk_cache: ChunkCache,
-}
-struct ReferencedFile {
-    base: u64,
-    file_base: u64,
-    path: ::std::path::PathBuf,
 }
 struct MemoryRange {
     /// Location of backing data in the core dump (logical position, starting from the first compressed chunk)
@@ -53,7 +48,7 @@ impl CoreDump {
         println!("{:?}", header);
         // Memory ranges
         let mut memory_ranges = Vec::with_capacity(header.n_ranges as usize);
-        let mut modules = Vec::<ReferencedFile>::new();
+        let mut modules = Vec::<super::ReferencedFile>::new();
         let mut n_chunks = 0;
         let mut last_v_chunk = 0;
         let mut last_end = 0;
@@ -89,13 +84,13 @@ impl CoreDump {
             if name != "" && name.starts_with("/") {
                 // Add the module
                 if let Some(v) = modules.iter_mut().find(|v| v.path == name) {
-                    if hdr.v_start < v.base {
-                        v.base = hdr.v_start;
+                    if hdr.v_start < v.virt_base {
+                        v.virt_base = hdr.v_start;
                         v.file_base = hdr.file_ofs;
                     }
                 }
                 else {
-                    modules.push(ReferencedFile { base: hdr.v_start, file_base: hdr.file_ofs, path: name.into() });
+                    modules.push(super::ReferencedFile { virt_base: hdr.v_start, file_base: hdr.file_ofs, path: name.into() });
                 }
             }
         }
@@ -158,8 +153,8 @@ impl CoreDump {
         self.memory_ranges.iter().map(|v| if v.is_anon { v.size } else { 0 }).sum::<u64>() as usize
     }
 
-    pub fn modules(&self) -> impl Iterator<Item=(::std::path::PathBuf,u64,u64)> {
-        self.modules.iter().map(|v| (v.path.clone(), v.base, v.file_base))
+    pub fn modules(&self) -> &[super::ReferencedFile] {
+        &self.modules
     }
 
     pub fn get_thread(&self, index: usize) -> &crate::CpuState {

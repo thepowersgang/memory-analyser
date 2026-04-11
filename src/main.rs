@@ -47,12 +47,12 @@ fn main() {
     let path = ::std::env::args().nth(1).expect("pass a core dump");
     let dump = core_dump::CoreDump::open(path.as_ref()).expect("Unable to open core dump");
     let mut debug = debug_info::DebugPool::new();
-    for (module_path, base, file_base) in dump.modules()
+    for f in dump.modules()
     {
-        match debug.add_file(&module_path, base, file_base)
+        match debug.add_file(&f.path, f.virt_base, f.file_base)
         {
         Ok(()) => {},
-        Err(e) => panic!("Failed to load {:?}: {:?}", module_path, e),
+        Err(e) => panic!("Failed to load {:?}: {:?}", f.path, e),
         }
     }
     debug.index_types();
