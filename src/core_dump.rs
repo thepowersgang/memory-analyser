@@ -7,7 +7,30 @@ enum Inner {
 pub struct CoreDump(Inner);
 impl CoreDump {
     pub fn open(path: &std::path::Path) -> ::std::io::Result<CoreDump> {
-        Ok(CoreDump(Inner::MRustc(mrustc::CoreDump::open(path)?)))
+        if path.starts_with("/proc/") {
+            // TODO: "core dump" from a running process
+            //return Ok(CoreDump(Inner::LinuxProcFs(linux_proc_fs::CoreDump::open(fp)?)))
+            todo!("procfs")
+        }
+        let mut fp = ::std::fs::File::open(path)?;
+        let prefix = {
+            use std::io::{Read,Seek};
+            let mut prefix = [0; 16];
+            fp.read_exact(&mut prefix)?;
+            fp.seek(::std::io::SeekFrom::Start(0))?;
+            prefix
+        };
+        // TODO: Detect ELF format dumps (elf prefix)
+        if prefix[..4] == *b"\x7FELF" {
+            //return Ok(CoreDump(Inner::Elf(elf::CoreDump::open(fp)?)))
+            todo!("elf core dumps")
+        }
+        else if prefix[..12] == *b"FullDump\x97\r\n\0" {
+            Ok(CoreDump(Inner::MRustc(mrustc::CoreDump::open(fp)?)))
+        }
+        else {
+            todo!("Unknown core dump format: first 16 bytes are {:#x?}", prefix);
+        }
     }
 
     pub fn anon_size(&self) -> usize {

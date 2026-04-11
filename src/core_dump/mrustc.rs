@@ -45,8 +45,8 @@ struct MemoryRange {
     is_anon: bool,
 }
 impl CoreDump {
-    pub fn open(path: &std::path::Path) -> ::std::io::Result<CoreDump> {
-        let mut fp = ::std::io::BufReader::new(::std::fs::File::open(path)?);
+    pub fn open(fp: std::fs::File) -> ::std::io::Result<CoreDump> {
+        let mut fp = ::std::io::BufReader::new(fp);
         // Header
         let header = raw::FileHeader::from_reader(&mut fp)?;
         header.check_magic()?;
