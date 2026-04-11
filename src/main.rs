@@ -67,6 +67,7 @@ fn main() {
     let mut output = Output::default();
     visit_type(&input, &mut output, 0, debug.get_type(&ty), addr, Path::root());
     eprintln!("enum counts: {:#?}", output.enum_variant_counts);
+    eprintln!("top-level type counts: {:#?}", output.root_type_counts);
     eprintln!("annotated usage: {:#?}", output.usage);
     eprintln!("{} KiB covered (out of {} KiB)", output.used_memory.calculate_usage() / 1024, dump.anon_size() / 1024)
 }
@@ -163,7 +164,9 @@ struct Output {
     /// Set of seen shared pointers (any sort of shared pointer, not just `std::shared_ptr`)
     shared_pointers: ::std::collections::BTreeSet<u64>,
 
-    // TODO: Type instance counts
+    /// Type instance counts, only if they're at the top level (i.e. `claim` called with this type)
+    // Not really useful? More intersting to see all composite type counts, to find what takes the most space
+    root_type_counts: ::std::collections::HashMap<String, usize>,
 
     /// Number of instances of each enum variants
     enum_variant_counts: ::std::collections::HashMap<String, ::std::collections::HashMap<String, usize>>,
@@ -174,6 +177,7 @@ impl Output {
         // Get the size of this type
         let size = input.debug.size_of(ty) as u64;
         self.claim_raw(path, addr, size, true);
+        *self.root_type_counts.entry(format!("{}", input.debug.fmt_type(ty))).or_default() += 1;
     }
     fn claim_raw(&mut self, path: &Path, addr: u64, size: u64, assoc: bool) {
         println!("@{} += {}", path, size);
