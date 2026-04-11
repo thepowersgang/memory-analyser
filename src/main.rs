@@ -69,9 +69,11 @@ fn main() {
         usage: Default::default(),
         used_memory: Default::default(),
         shared_pointers: Default::default(),
+        enum_variant_counts: Default::default(),
     };
     visit_type(&mut output, 0, debug.get_type(&ty), addr, Path::root());
-    eprintln!("{:#?}", output.usage);
+    eprintln!("enum counts: {:#?}", output.enum_variant_counts);
+    eprintln!("annotated usage: {:#?}", output.usage);
     eprintln!("{} KiB covered (out of {} KiB)", output.used_memory.calculate_usage() / 1024, dump.anon_size() / 1024)
 }
 
@@ -154,7 +156,9 @@ struct Output<'a> {
     shared_pointers: ::std::collections::BTreeSet<u64>,
 
     // TODO: Type instance counts
-    // TODO: Enum variant counts
+
+    /// Number of instances of each enum variants
+    enum_variant_counts: ::std::collections::HashMap<String, ::std::collections::HashMap<String, usize>>,
 }
 impl Output<'_> {
     /// Annotate the existence of a top-level type at a location (records memory usage)
@@ -303,6 +307,10 @@ fn visit_type(output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u6
                 print!("TU: "); dump_type_fields(output.debug, ty, 0); println!("");
             }
             if let Some((name,ty)) = tu.variant {
+                *output.enum_variant_counts
+                    .entry(composite_type.name().to_owned()).or_default()
+                    .entry(name.to_owned()).or_default()
+                    += 1;
                 visit_type(output, depth+1, ty, addr + tu.data_ofs, path.field(name));
             }
             for f in tu.other_fields {
