@@ -14,8 +14,26 @@ impl CoreDump {
         let mut fp = ::std::io::BufReader::new(fp);
         let mut elf = ::elf::ElfStream::<::elf::endian::NativeEndian,_>::open_stream(&mut fp)?;
         let c = elf.ehdr.class;
+
+        let mut memory_ranges = Vec::new();
+        for s in elf.segments() {
+            if s.p_type == ::elf::abi::PT_LOAD {
+                memory_ranges.push(MemoryRange {
+                    v_start: s.p_vaddr,
+                    size: s.p_memsz,
+                    dump_file_ofs: if s.p_offset != 0 {
+                        RangeSource::Dump { offset: s.p_offset }
+                    } else {
+                        todo!("Reference data from outside the core dump")
+                    },
+                    is_anon: true,
+                });
+            }
+        }
+
         let mut threads = Vec::new();
         let mut modules: Vec<super::ReferencedFile> = Vec::new();
+
         // Get the PT_NOTE section
         let note_segments: Vec<_> = elf.segments().iter().filter(|p| p.p_type == ::elf::abi::PT_NOTE).copied().collect();
         for mut s_note in note_segments {
@@ -109,25 +127,16 @@ impl CoreDump {
                                 path: f.path.to_owned(),
                             });
                         }
+
+                        for r in memory_ranges.iter_mut() {
+                            if r.v_start == f.v_start {
+                                r.is_anon = false;
+                            }
+                        }
                     }
                     },
                 _ => todo!("Note {:?} = ty={:#x} {:?}", crate::ByteStr(note.name), note.n_type, crate::ByteStr(note.desc)),
                 }
-            }
-        }
-        let mut memory_ranges = Vec::new();
-        for s in elf.segments() {
-            if s.p_type == ::elf::abi::PT_LOAD {
-                memory_ranges.push(MemoryRange {
-                    v_start: s.p_vaddr,
-                    size: s.p_memsz,
-                    dump_file_ofs: if s.p_offset != 0 {
-                        RangeSource::Dump { offset: s.p_offset }
-                    } else {
-                        todo!("Reference data from outside the core dump")
-                    },
-                    is_anon: false,
-                });
             }
         }
         Ok(CoreDump {
