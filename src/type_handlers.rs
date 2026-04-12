@@ -19,7 +19,7 @@ impl<'d> CppUniquePtr<'d> {
         if composite_type.name().starts_with("std::unique_ptr<") {
             let (o, ptr_ty) = input.get_field(ty, Path::root().field("_M_t").parent(0).field("_M_t").parent(0).parent(1).field("_M_head_impl"));
             let ptr_ty = input.resolve_alias_chain_tr(&ptr_ty);
-            let Type::Pointer(inner_ty, _) = ptr_ty else { panic!("Expected pointer") };
+            let Type::Pointer(inner_ty, ..) = ptr_ty else { panic!("Expected pointer") };
             let inner_ty = input.resolve_alias_chain_tr(&inner_ty);
 
             Some(CppUniquePtr {
@@ -51,12 +51,12 @@ impl<'d> CppSharedPtr<'d> {
             let (rc_o , rc_ty ) = input.get_field(ty, Path::root().parent(0).field("_M_refcount").field("_M_pi"));
             let inner_ty = {
                 let i = input.resolve_alias_chain_tr(&ptr_ty);
-                let Type::Pointer(i, _) = i else { panic!("Expected pointer") };
+                let Type::Pointer(i, ..) = i else { panic!("Expected pointer") };
                 input.resolve_alias_chain_tr(i)
             };
             let rc_ty = {
                 let i = input.resolve_alias_chain_tr(&rc_ty);
-                let Type::Pointer(i, _) = i else { panic!("Expected pointer") };
+                let Type::Pointer(i, ..) = i else { panic!("Expected pointer") };
                 input.resolve_alias_chain_tr(i)
             };
 
@@ -90,7 +90,7 @@ impl<'d> CppVector<'d> {
         let inner_ty = {
             let (_, ty) = input.get_field(ty, Path::root().parent(0).field("_M_impl").parent(1).field("_M_start"));
             let ty = input.resolve_alias_chain_tr(&ty);
-            let Type::Pointer(ty, _) = ty else { panic!("Expected pointer, got {:?}", ty); };
+            let Type::Pointer(ty, ..) = ty else { panic!("Expected pointer, got {:?}", ty); };
             *ty
             };
         Some(CppVector {
@@ -250,7 +250,7 @@ impl<'d> CppUnorderedMap<'d> {
             input.resolve_alias_chain_tr(&i.sub_types["__node_ptr"])
         };
         let node_ty = {
-            let Type::Pointer(i, _) = node_ptr_ty else { panic!("Expected pointer, got {}", input.debug.fmt_type(node_ptr_ty)) };
+            let Type::Pointer(i, ..) = node_ptr_ty else { panic!("Expected pointer, got {}", input.debug.fmt_type(node_ptr_ty)) };
             input.resolve_alias_chain_tr(i)
         };
         let (data_ofs, _) = input.get_field(node_ty, Path::root().parent(1).parent(0).field("_M_storage").field("_M_storage").field("__data"));
@@ -357,7 +357,7 @@ impl MrustcRcString {
         if composite_type.name() != "RcString" {
             return None;
         }
-        let Type::Pointer(inner_ty,_) = input.debug.get_type(&composite_type.fields[0].ty) else { panic!() };
+        let Type::Pointer(inner_ty, ..) = input.debug.get_type(&composite_type.fields[0].ty) else { panic!() };
         let inner_ty = input.debug.get_type(inner_ty);
         if false {
             print!("RCSTRING: "); crate::dump_type_fields(input.debug, inner_ty, 0); println!("");

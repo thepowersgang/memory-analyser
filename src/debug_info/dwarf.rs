@@ -357,7 +357,7 @@ impl DebugPool {
         Type::Union(composite_type) => composite_type.size,
         Type::Varianted(et) => et.outer.size,
         Type::Primtive(primitive_type) => (primitive_type.bits as usize + 7) / 8,
-        Type::Pointer(_,_) => 8,
+        Type::Pointer(..) => 8,
         Type::Alias(type_ref) => self.size_of(self.get_type(type_ref)),
         Type::Enum(_) => todo!("size_of: enum"),
         Type::Array(inner, count) => if *count == 0 { 0 } else { self.size_of(self.get_type(inner)) * *count },
@@ -386,7 +386,10 @@ impl DebugPool {
         Type::Union(composite_type) => f.write_str(&composite_type.name),
         Type::Varianted(e) => f.write_str(&e.outer.name),
         Type::Primtive(primitive_type) => write!(f, "{}[[bits={}]]", primitive_type.name, primitive_type.bits),
-        Type::Pointer(type_ref, cls) => {
+        Type::Pointer(type_ref, cls, name) => {
+            if name != "" {
+                return f.write_str(name);
+            }
             match cls {
             PointerClass::Bare => f.write_str("*")?,
             PointerClass::Reference => f.write_str("&")?,

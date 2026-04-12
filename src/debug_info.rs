@@ -91,7 +91,7 @@ pub enum Type {
     Union(CompositeType),
     Varianted(Enum),
     Primtive(PrimitiveType),
-    Pointer(TypeRef, PointerClass),
+    Pointer(TypeRef, PointerClass, String),
     Alias(TypeRef),
     Enum(String),
     Array(TypeRef, usize),

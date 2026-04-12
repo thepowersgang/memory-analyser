@@ -341,9 +341,10 @@ impl super::DebugPool
                         gimli::DW_TAG_pointer_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
                             let target_ty = self.get_typeref_from_attr(unit_index, v);
-                            //println!("> {ty_ref:?} pointer_type: {:?} = {target_ty:?}", get_name(&debug_info, &unit, v));
+                            let name = get_name(&debug_info, &unit, v).map(|v| v.to_owned()).unwrap_or_default();
+                            //println!("> {ty_ref:?} pointer_type: {name:?} = {target_ty:?}", );
                             if let Some(target_ty) = target_ty {
-                                self.types[ty_ref.0] = Some(Type::Pointer(target_ty, super::PointerClass::Bare));
+                                self.types[ty_ref.0] = Some(Type::Pointer(target_ty, super::PointerClass::Bare, name));
                             }
                             else {
                                 println!("> {ty_ref:?} pointer_type: {:?} = {target_ty:?}", get_name(&debug_info, &unit, v));
@@ -352,10 +353,10 @@ impl super::DebugPool
                         },
                         gimli::DW_TAG_reference_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
-                            let name = get_name(&debug_info, &unit, v);
+                            let name = get_name(&debug_info, &unit, v).map(|v| v.to_owned()).unwrap_or_default();
                             let target_ty = self.get_typeref_from_attr(unit_index, v);
                             if let Some(target_ty) = target_ty {
-                                self.types[ty_ref.0] = Some(Type::Pointer(target_ty, super::PointerClass::Reference));
+                                self.types[ty_ref.0] = Some(Type::Pointer(target_ty, super::PointerClass::Reference, name));
                             }
                             else {
                                 println!("> {ty_ref:?} reference type: {name:?} = {target_ty:?}",);
@@ -364,10 +365,10 @@ impl super::DebugPool
                         },
                         gimli::DW_TAG_rvalue_reference_type => {
                             let ty_ref = self.dwarf_type_ref(unit_index, v.offset);
-                            let name = get_name(&debug_info, &unit, v);
+                            let name = get_name(&debug_info, &unit, v).map(|v| v.to_owned()).unwrap_or_default();
                             let target_ty = self.get_typeref_from_attr(unit_index, v);
                             if let Some(target_ty) = target_ty {
-                                self.types[ty_ref.0] = Some(Type::Pointer(target_ty, super::PointerClass::RValueReference));
+                                self.types[ty_ref.0] = Some(Type::Pointer(target_ty, super::PointerClass::RValueReference, name));
                             }
                             else {
                                 println!("> {ty_ref:?} rvalue reference type: {name:?} = {target_ty:?}",);

@@ -461,7 +461,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         fn rc_ptr(input: &Input, output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path, ptr_path: Path) {
             let (ptr_o,ptr_ty) = input.get_field(ty, ptr_path);
             let ptr_t = input.debug.get_type(&ptr_ty);
-            let debug_info::Type::Pointer(inner_ty, _) = ptr_t else { panic!("Expected pointer, got  {:?}", ptr_t); };
+            let debug_info::Type::Pointer(inner_ty, ..) = ptr_t else { panic!("Expected pointer, got  {:?}", ptr_t); };
             let inner_ty = input.debug.get_type(inner_ty);
             let ptr_val = input.dump.read_ptr(addr + ptr_o);
             if ptr_val != 0 && output.shared_pointers.insert(ptr_val) {
@@ -471,7 +471,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         fn unique_ptr(input: &Input, output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path, ptr_path: Path) {
             let (ptr_o,ptr_ty) = input.get_field(ty, ptr_path);
             let ptr_t = input.debug.get_type(&ptr_ty);
-            let debug_info::Type::Pointer(inner_ty, _) = ptr_t else { panic!("Expected pointer, got  {:?}", ptr_t); };
+            let debug_info::Type::Pointer(inner_ty, ..) = ptr_t else { panic!("Expected pointer, got  {:?}", ptr_t); };
             let inner_ty = input.debug.get_type(inner_ty);
             let ptr_val = input.dump.read_ptr(addr + ptr_o);
             if ptr_val != 0 {
@@ -586,11 +586,12 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
     debug_info::Type::Array(..) => todo!("visit_type: array"),
     debug_info::Type::Enum(_) => {},
     debug_info::Type::Primtive(_) => {},
-    debug_info::Type::Pointer(dst_ty, _) => {
+    debug_info::Type::Pointer(dst_ty, _, name) => {
         let addr = input.dump.read_ptr(addr);
         println!("{:depth$}->{:#x}", "", addr);
         if addr != 0 {
-            if false {
+            // Only visit into rust's `Box` type
+            if name.starts_with("alloc::boxed::Box<") {
                 visit_type(input, output, depth+1, input.debug.get_type(dst_ty), addr, path.deref());
             }
         }

@@ -17,7 +17,7 @@ impl<'d> AllocRc<'d> {
         let (ptr_o, ptr_ty) = input.get_field(ty, Path::root().field("ptr").field("pointer"));
         let inner_ty = {
             let i = input.resolve_alias_chain_tr(&ptr_ty);
-            let Type::Pointer(i, _) = i else { panic!("Expected pointer") };
+            let Type::Pointer(i, ..) = i else { panic!("Expected pointer") };
             input.resolve_alias_chain_tr(i)
         };
 
