@@ -167,6 +167,10 @@ impl super::DebugPool
                         }
                         //println!("{} {:?} {:x?} ({}/@{})", v.depth, stack, v.tag(), unit_index, v.offset.0);
                         if (v.depth as usize) > stack.len() {
+                            if v.tag() == gimli::DW_TAG_subprogram {
+                                println!("FUNCTION: {} {stack:?} {:x?} ({unit_index}/@{}) name={:?}",
+                                    v.depth, v.tag(), v.offset.0, get_name(debug_info, &unit, v));
+                            }
                             continue ;
                         }
                         let get_pc_range = |v: &gimli::DebuggingInformationEntry<::gimli::EndianSlice<::gimli::LittleEndian>>| -> PcRanges {
@@ -177,14 +181,19 @@ impl super::DebugPool
                                 _ => todo!("{v:?} : {:?}", v.value()),
                                 }
                             }
-                            let at_lo = v.attr(::gimli::DW_AT_low_pc).map(|v| load_base + unwrap_addr(v));
-                            let at_hi = v.attr(::gimli::DW_AT_high_pc).map(|v| load_base + unwrap_addr(v));
+                            let at_lo = v.attr(::gimli::DW_AT_low_pc).map(|v| unwrap_addr(v));
+                            let at_hi = v.attr(::gimli::DW_AT_high_pc).map(|v| unwrap_addr(v));
                             let ranges = v.attr(::gimli::DW_AT_ranges).map(|v| v.value());
                             PcRanges {
                                 ranges: match (at_lo, at_hi, ranges)
                                 {
-                                (Some(lo), None, _) => vec![PcRange { start: lo, end: lo }],
-                                (Some(lo), Some(hi), _) => vec![PcRange { start: lo, end: hi }],
+                                (Some(lo), None, _) => vec![PcRange { start: load_base + lo, end: load_base + lo }],
+                                (Some(lo), Some(hi), _) => if lo <= hi {
+                                    vec![PcRange { start: load_base + lo, end: load_base + hi }]
+                                }
+                                else {
+                                    vec![PcRange { start: load_base + lo, end: load_base + lo + hi }]
+                                },
                                 (None, _, None) => vec![],
                                 (None, _, Some(r)) => {
                                     let r = match r {
@@ -226,8 +235,8 @@ impl super::DebugPool
                                 _ => todo!("Frame base: {:?}", fb),
                                 }
                             }).unwrap_or(VariablePosition::OptimisedOut);
-                            //println!("fn {}: name={:?} @ {}", full_name, name, v.depth);
                             let pc_range = get_pc_range(v);
+                            //println!("fn {}: name={:?} - {:?}", full_name, name, pc_range);
                             stack.push(State::InFunction(full_name, FunctionRecord {
                                 pc_range,
                                 frame_base,
