@@ -568,6 +568,11 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         };
         if let Some(v) = variant {
             let vi = unsafe { (v as *const debug_info::EnumVariant).offset_from_unsigned(e.variants.as_ptr()) };
+			let name = if v.fields.len() == 1 { v.fields[0].name.clone() } else { format!("#{vi}") };
+			*output.enum_variant_counts
+				.entry(e.outer.name().to_owned()).or_default()
+				.entry(name).or_default()
+				+= 1;
             //println!("Matched {} #{vi}", e.outer.name());
             // TODO: Record the variant in the stats for this type
             // Recurse
