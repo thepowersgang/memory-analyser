@@ -141,6 +141,7 @@ impl DebugPool {
                         !(composite_type.fields.is_empty() && composite_type.parents.is_empty())
                     },
                     Type::Enum(_) => true,  // TODO: enums might still be incomplete
+                    Type::Varianted(et) => !et.variants.is_empty(), // These shouldn't be incomplete?
                     Type::Alias(..)
                     |Type::Primtive(..)
                     |Type::Pointer(..)
@@ -332,6 +333,7 @@ impl DebugPool {
         match ty {
         Type::Struct(composite_type) => composite_type.size,
         Type::Union(composite_type) => composite_type.size,
+        Type::Varianted(et) => et.outer.size,
         Type::Primtive(primitive_type) => (primitive_type.bits as usize + 7) / 8,
         Type::Pointer(_,_) => 8,
         Type::Alias(type_ref) => self.size_of(self.get_type(type_ref)),
@@ -360,6 +362,7 @@ impl DebugPool {
         Type::Enum(name) => f.write_str(name),
         Type::Struct(composite_type) => f.write_str(&composite_type.name),
         Type::Union(composite_type) => f.write_str(&composite_type.name),
+        Type::Varianted(e) => f.write_str(&e.outer.name),
         Type::Primtive(primitive_type) => write!(f, "{}[[bits={}]]", primitive_type.name, primitive_type.bits),
         Type::Pointer(type_ref, cls) => {
             match cls {

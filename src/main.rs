@@ -406,6 +406,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         }
         visit_ct_inner(input, output, depth, composite_type, addr, path)
     },
+    debug_info::Type::Varianted(v) => todo!("Variented: {:?}", v),
     debug_info::Type::Union(composite_type) => {
         println!("Not recursing into union: {:?}", composite_type.name());
     },

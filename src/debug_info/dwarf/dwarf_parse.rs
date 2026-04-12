@@ -42,10 +42,22 @@ impl super::DebugPool
             gimli::UnitType::Compilation => {
                 let abbr = debug_info.abbreviations(&u).unwrap();
 
+                struct TypeData {
+                    ct: CompositeType,
+                    ty: TypeRef,
+                    is_union: bool,
+                    enum_data: Option<(EnumData, Vec<(::gimli::UnitOffset<usize>, usize, usize,)>,)>,
+                    field_refs: Vec<::gimli::UnitOffset<usize>>,
+                }
+                struct EnumData {
+                    discr_ref: Option<::gimli::UnitOffset<usize>>,
+                    variants: Vec<crate::debug_info::EnumVariant>,
+                }
                 enum State {
                     Root,
                     Namespace(String),
-                    InType(CompositeType, TypeRef, bool),
+                    InType(TypeData),
+                    EnumVariants(EnumData, Vec<CompositeField>, Vec<(::gimli::UnitOffset<usize>, usize, usize,)>),
                     InFunction(String, FunctionRecord),
                     // Should only exist underneath a `InFunction`
                     FcnScope(PcRanges),
@@ -55,7 +67,8 @@ impl super::DebugPool
                         match self {
                         Self::Root => write!(f, "Root"),
                         Self::Namespace(name) => f.debug_tuple("NamedScope").field(name).finish(),
-                        Self::InType(ct, ..) => f.debug_tuple("InType").field(&ct.name).finish(),
+                        Self::InType(TypeData { ct, .. }) => f.debug_tuple("InType").field(&ct).finish(),
+                        Self::EnumVariants(..) => f.debug_tuple("EnumVariants").finish(),
                         Self::InFunction(name, ..) => f.debug_tuple("InFunction").field(name).finish(),
                         Self::FcnScope(arg0) => f.debug_tuple("FcnScope").field(arg0).finish(),
                         }
@@ -68,7 +81,8 @@ impl super::DebugPool
                         State::Namespace(n) => return Some(n),
                         State::InFunction(n, ..) => return Some(n),
                         State::FcnScope(..) => {},
-                        State::InType(ct, _, _) => return Some(&ct.name),
+                        State::InType(TypeData { ct, .. }) => return Some(&ct.name),
+                        State::EnumVariants(..) => {},
                         }
                     }
                     None
@@ -95,21 +109,59 @@ impl super::DebugPool
                             State::InFunction(n, fr) => {
                                 self.functions.insert(n, fr);
                             } 
-                            State::InType(ct, ty, is_union) => {
+                            State::InType(td) => {
                                 if false {
-                                    print!("{} {}: {{", if is_union { "union" } else { "struct" }, ct.name);
-                                    for f in &ct.fields {
+                                    print!("{} {}: {{", if td.is_union { "union" } else { "struct" }, td.ct.name);
+                                    for f in &td.ct.fields {
                                         print!(" {}: {:?},", f.name, f.ty);
                                     }
                                     println!(" }}");
                                 }
-                                
-                                self.types[ty.0] = Some(if is_union {
-                                    Type::Union(ct)
-                                }else {
-                                    Type::Struct(ct)
-                                });
+                                self.types[td.ty.0] = Some(if let Some((enum_data,offsets)) = td.enum_data {
+                                        print!("enum {}: {{", td.ct.name);
+                                        for f in &td.ct.fields {
+                                            print!(" {}: {:?},", f.name, f.ty);
+                                        }
+                                        for v in &enum_data.variants {
+                                            print!(" {}: {{", v.name);
+                                            for f in &v.fields {
+                                                print!(" {}: {:?},", f.name, f.ty);
+                                            }
+                                            print!(" }} = {:?}", v.discr_vals);
+                                        }
+                                        println!(" }}");
+                                        let discr_ofs = match enum_data.discr_ref {
+                                            Some(a) => {
+                                                match td.field_refs.iter().position(|v| *v == a)
+                                                {
+                                                Some(i) => Some(td.ct.fields[i].offset),
+                                                None => match offsets.iter().find(|(o,_,_)| *o == a)
+                                                    {
+                                                    Some(&(_, v,f)) => Some(enum_data.variants[v].fields[f].offset),
+                                                    None => panic!(""),
+                                                    },
+                                                }
+                                            },
+                                            None => None,
+                                        };
+                                        Type::Varianted(crate::debug_info::Enum {
+                                            discr_ofs,
+                                            outer: td.ct,
+                                            variants: enum_data.variants,
+                                        })
+                                    }
+                                    else if td.is_union {
+                                        Type::Union(td.ct)
+                                    }
+                                    else {
+                                        Type::Struct(td.ct)
+                                    });
                             }
+                            State::EnumVariants(enm, d, offsets) => {
+                                assert!(d.is_empty(), "{:?}", d);
+                                let Some(State::InType(td)) = stack.last_mut() else { panic!() };
+                                td.enum_data = Some((enm,offsets));
+                            },
                             _ => {},
                             }
                         }
@@ -140,7 +192,7 @@ impl super::DebugPool
                                         _ => todo!(),
                                         };
                                     let mut rv = Vec::new();
-                                    let mut base_addr = 0;
+                                    let mut base_addr = load_base;
                                     for v in r.map(|v| v.unwrap())
                                     {
                                         match v {
@@ -148,6 +200,7 @@ impl super::DebugPool
                                         gimli::RawRngListEntry::OffsetPair { begin, end } => rv.push(PcRange { start: base_addr + begin, end: base_addr + end }),
                                         gimli::RawRngListEntry::StartEnd { begin, end } => rv.push(PcRange { start: load_base + begin, end: load_base + end }),
                                         gimli::RawRngListEntry::StartLength { begin, length } => rv.push(PcRange { start: load_base + begin, end: load_base + begin + length }),
+                                        gimli::RawRngListEntry::AddressOrOffsetPair { begin, end } => rv.push(PcRange { start: base_addr + begin, end: base_addr + end }),
                                         _ => todo!("{:?}", v),
                                         }
                                     }
@@ -204,9 +257,9 @@ impl super::DebugPool
                                 self.types[ty_ref.0] = Some(Type::Alias(target_ty))
                             }
                             // If in a type, save against that type
-                            if let State::InType(ct, _, _) = stack.last_mut().unwrap() {
+                            if let State::InType(td) = stack.last_mut().unwrap() {
                                 if let Some(n) = name {
-                                    ct.sub_types.insert(n.to_owned(), ty_ref);
+                                    td.ct.sub_types.insert(n.to_owned(), ty_ref);
                                 }
                             }
                             continue
@@ -223,7 +276,13 @@ impl super::DebugPool
                             let name = get_name(&debug_info, &unit, v);
                             let name = get_scoped_name(&stack, "struct", name, v.offset);
                             //println!("> {ty_ref:?} struct: {:?}", name);
-                            stack.push(State::InType(CompositeType::new(name, size as usize), ty_ref, false, ));
+                            stack.push(State::InType(TypeData {
+                                ct: CompositeType::new(name, size as usize),
+                                ty: ty_ref,
+                                is_union: false,
+                                enum_data: None,
+                                field_refs: Vec::new()
+                                }));
                             continue;
                         },
                         gimli::DW_TAG_enumeration_type => {
@@ -240,7 +299,13 @@ impl super::DebugPool
                             let name = get_name(&debug_info, &unit, v);
                             let name = get_scoped_name(&stack, "union", name, v.offset);
                             //println!("> {ty_ref:?} union: {:?}", name);
-                            stack.push(State::InType(CompositeType::new(name, size as usize), ty_ref, true, ));
+                            stack.push(State::InType(TypeData {
+                                ct: CompositeType::new(name, size as usize),
+                                ty: ty_ref,
+                                is_union: true,
+                                enum_data: None,
+                                field_refs: Vec::new()
+                                }));
                             continue;
                         },
                         gimli::DW_TAG_const_type => {
@@ -386,7 +451,7 @@ impl super::DebugPool
                             _ => {},
                             }
                         },
-                        State::InType(ct, _, is_union) => {
+                        State::InType(td) => {
                             match v.tag()
                             {
                             gimli::DW_TAG_GNU_template_template_param => {},
@@ -408,7 +473,7 @@ impl super::DebugPool
                                     gimli::AttributeValue::Data8(v) => v,
                                     a => todo!("{:?}", a),
                                     };
-                                ct.parents.push((inner_ofs, inner_type));
+                                td.ct.parents.push((inner_ofs, inner_type));
                             },
 
                             gimli::DW_TAG_imported_declaration => {},
@@ -420,16 +485,16 @@ impl super::DebugPool
                                 let name = get_name(&debug_info, &unit, v);
                                 let offset = match v.attr_value(gimli::DW_AT_data_member_location)
                                     {
-                                    None => if *is_union { 0 } else {
+                                    None => if td.is_union { 0 } else {
                                         // TODO: bitfields have no offset - ignore for now
-                                        println!("No offset? in `{ty_name}` {name:?} - v={v:?}", ty_name=ct.name);
+                                        println!("No offset? in `{ty_name}` {name:?} - v={v:?}", ty_name=td.ct.name);
                                         continue ;
                                     },
                                     Some(v) => v.udata_value().unwrap(),
                                     };
                                 let ty = self.get_typeref_from_attr(unit_index, v);
                                 //println!("> MEMBER `{ty_name}` FIELD {name:?} @ {pos:?}: {ty:?} {v:?}");
-                                ct.fields.push(CompositeField {
+                                td.ct.fields.push(CompositeField {
                                     name: match name
                                         {
                                         Some(name) => name.to_owned(),
@@ -438,10 +503,77 @@ impl super::DebugPool
                                     ty: ty.unwrap(),
                                     offset,
                                 });
+                                td.field_refs.push(v.offset);
+                            },
+
+                            gimli::DW_TAG_variant_part => {
+                                // This is a sub-section for enum variants
+                                // `discr` is a reference to the member for the discriminant
+                                let discr_ref = v.attr_value(gimli::DW_AT_discr)
+                                    .map(|v| match v {
+                                        gimli::AttributeValue::UnitRef(o) => o,
+                                        _ => panic!("DW_AT_discr should be a UnitRef, got {:?}", v),
+                                    });
+                                stack.push(State::EnumVariants(EnumData { discr_ref, variants: Vec::new() }, Vec::new(), Vec::new()));
                             },
                             _ => todo!("InType: {:x?}", v),
                             }
                         },
+                        State::EnumVariants(enum_data, fields, field_offsets) => match v.tag()
+                            {
+                            gimli::DW_TAG_variant => {
+                                let name = get_name(&debug_info, &unit, v);
+                                let discr_vals = if let Some(v) = v.attr_value(gimli::DW_AT_discr_value) {
+                                    use crate::debug_info::VariantDiscr;
+                                    let v = match v {
+                                        ::gimli::AttributeValue::Data1(v) => VariantDiscr::SingleU(v as u64, 1),
+                                        ::gimli::AttributeValue::Data2(v) => VariantDiscr::SingleU(v as u64, 2),
+                                        ::gimli::AttributeValue::Data4(v) => VariantDiscr::SingleU(v as u64, 4),
+                                        ::gimli::AttributeValue::Data8(v) => VariantDiscr::SingleU(v as u64, 8),
+                                        ::gimli::AttributeValue::Block(b) => VariantDiscr::Data(b[..].to_owned()),
+                                        _ => todo!("discr: {:?}", v),
+                                        };
+                                    vec![v]
+                                }
+                                else if let Some(v) = v.attr_value(gimli::DW_AT_discr_list) {
+                                    todo!("discr_list {:?}", v)
+                                }
+                                else {
+                                    vec![]
+                                };
+                                enum_data.variants.push(crate::debug_info::EnumVariant {
+                                    name: match name
+                                        {
+                                        Some(name) => name.to_owned(),
+                                        None => format!("_#{}", v.offset.0),
+                                        },
+                                    discr_vals,
+                                    fields: ::std::mem::take(fields),
+                                });
+                            },
+                            gimli::DW_TAG_member => {
+                                let name = get_name(&debug_info, &unit, v);
+                                let offset = match v.attr_value(gimli::DW_AT_data_member_location)
+                                    {
+                                    None => panic!("no offset in enum member?"),
+                                    Some(v) => v.udata_value().unwrap(),
+                                    };
+                                let ty = self.get_typeref_from_attr(unit_index, v);
+                                //println!("> V MEMBER {name:?} @ {offset:?}: {ty:?} {v:?}");
+                                field_offsets.push((v.offset, enum_data.variants.len(), fields.len(),));
+                                fields.push(CompositeField {
+                                    name: match name
+                                        {
+                                        Some(name) => name.to_owned(),
+                                        None => format!("_#{}", v.offset.0),
+                                        },
+                                    ty: ty.unwrap(),
+                                    offset,
+                                });
+                                // TODO:
+                            },
+                            _ => todo!("EnumVariants: {:x?}", v),   
+                            },
                         }
                     }
                 }

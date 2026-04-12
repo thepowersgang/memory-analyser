@@ -127,6 +127,7 @@ pub fn get_field(debug: &DebugPool, ty: &Type, path: &Path) -> (u64, TypeRef) {
         PathNode::Null|
         PathNode::Parent(_)|PathNode::Index(_)|PathNode::Deref => panic!("Unexpected path node for `union`"),
         },
+    Type::Varianted(_) => todo!("Varianted"),
     Type::Array(_, _) => todo!("array"),
     Type::Primtive(_) => panic!("Getting field of a primitive"),
     Type::Pointer(..) => todo!("Pointer"),

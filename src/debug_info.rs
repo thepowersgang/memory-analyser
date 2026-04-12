@@ -75,6 +75,7 @@ pub struct TypeRef(usize);
 pub enum Type {
     Struct(CompositeType),
     Union(CompositeType),
+    Varianted(Enum),
     Primtive(PrimitiveType),
     Pointer(TypeRef, PointerClass),
     Alias(TypeRef),
@@ -130,4 +131,23 @@ pub struct CompositeField {
     pub offset: u64,
     pub name: String,
     pub ty: TypeRef,
+}
+
+#[derive(Debug)]
+pub struct Enum {
+    pub outer: CompositeType,
+    pub discr_ofs: Option<u64>,
+    pub variants: Vec<EnumVariant>,
+}
+#[derive(Debug)]
+pub struct EnumVariant {
+    pub name: String,
+    pub discr_vals: Vec<VariantDiscr>,
+    pub fields: Vec<crate::debug_info::CompositeField>,
+}
+#[derive(Debug)]
+pub enum VariantDiscr {
+    SingleU(u64, u8),
+    //SingleS(u64, u8),
+    Data(Vec<u8>),
 }
