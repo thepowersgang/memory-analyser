@@ -160,6 +160,24 @@ fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u
         }
         print!(" }}");
     },
+    debug_info::Type::Varianted(e) => {
+        print!("enum {} {{", e.outer.name());
+        for f in e.outer.iter_fields() {
+            print!(" {}: ", f.name);
+            dump_type_fields(debug, &debug.get_type(&f.ty), ofs+f.offset);
+            print!(",");
+        }
+        for (i,v) in e.variants.iter().enumerate() {
+            print!(" #{i}: {{");
+            for f in v.fields.iter() {
+                print!(" {}: ", f.name);
+                dump_type_fields(debug, &debug.get_type(&f.ty), ofs+f.offset);
+                print!(",");
+            }
+            print!("}},")
+        }
+        print!(" }}");
+    }
     _ => print!("@{ofs:#x}: {}", debug.fmt_type(ty)),
     }
 }
@@ -464,7 +482,65 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         }
         visit_ct_inner(input, output, depth, composite_type, addr, path)
     },
-    debug_info::Type::Varianted(v) => todo!("Variented: {:?}", v),
+    debug_info::Type::Varianted(e) => {
+        fn find_variant<'a>(input: &Input, variants: &'a [debug_info::EnumVariant], discr_addr: u64) -> Option<&'a debug_info::EnumVariant> {
+            for var in variants.iter() {
+                for dv in var.discr_vals.iter() {
+                    match *dv {
+                    debug_info::VariantDiscr::Data(ref des) => {
+                        assert!(des.len() <= 16, "TODO: Long enum discriminant ({} bytes > 16)", des.len());
+                        let mut buf = [0; 16];
+                        let buf = &mut buf[..des.len()];
+                        input.dump.read_bytes(discr_addr, buf);
+                        if buf == des {
+                            return Some(var);
+                        }
+                    },
+                    debug_info::VariantDiscr::SingleU(v,s) => {
+                        let des = {
+                            let mut b = [0u8; 16];
+                            match s {
+                            1 => b[..1].copy_from_slice(&(v as u8).to_ne_bytes()),
+                            2 => b[..2].copy_from_slice(&(v as u16).to_ne_bytes()),
+                            4 => b[..4].copy_from_slice(&(v as u32).to_ne_bytes()),
+                            8 => b[..8].copy_from_slice(&(v as u64).to_ne_bytes()),
+                            _ => todo!(),
+                            }
+                            b
+                        };
+                        let mut buf = [0; 16];
+                        input.dump.read_bytes(discr_addr, &mut buf[..s as usize]);
+                        if buf == des {
+                            return Some(var);
+                        }
+                    },
+                    }
+                }
+            }
+            variants.iter().find(|v| v.discr_vals.is_empty())
+        }
+        dump_type_fields(input.debug, ty, 0);
+        for f in &e.outer.fields {
+            visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
+        }
+        let variant = if let Some(o) = e.discr_ofs {
+            find_variant(input, &e.variants, addr + o)
+        }
+        else {
+            e.variants.first()
+        };
+        if let Some(v) = variant {
+            // TODO: Record the variant in the stats for this type
+            // Recurse
+            for f in &e.outer.fields {
+                visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.field(&v.name).field(&f.name));
+            }
+        }
+        else {
+            // No variant
+            println!("No matching variant for {}", input.debug.fmt_type(ty));
+        }
+    },
     debug_info::Type::Union(composite_type) => {
         println!("Not recursing into union: {:?}", composite_type.name());
     },
