@@ -161,6 +161,16 @@ impl DebugPool {
         }
     }
 
+    pub fn resolve_symbol(&self, addr: u64) -> Option<(&str, u64)> {
+        if let Some((&a, v)) = self.symbols.iter().min_by_key(|v| v.0.abs_diff(addr)) {
+            for &(s, ref n) in v {
+                if a <= addr && addr < a + s {
+                    return Some((n, addr - a))
+                }
+            }
+        }
+        None
+    }
     pub fn find_type_by_vtable(&self, addr: u64) -> Option<&Type> {
         if let Some((&a, v)) = self.symbols.iter().min_by_key(|v| v.0.abs_diff(addr)) {
             for &(s, ref n) in v {
@@ -213,11 +223,12 @@ impl DebugPool {
         &gimli::CfaRule::Expression(_unwind_expression) => todo!("CfaRule::Expression"),
         }
     }
-    pub fn get_caller(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump) -> crate::CpuState {
+    pub fn get_caller(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump) -> Option<crate::CpuState> {
         println!("get_caller: {:#x}", state.get_pc());
         let mut context = ::gimli::UnwindContext::new();
         let Some(i) = self.get_unwind(&mut context, state.get_pc()) else {
-            todo!("get_caller: no entry for PC={:#x}", state.get_pc());
+            println!("get_caller: no entry for PC={:#x}", state.get_pc());
+            return None
         };
         let cfa = Self::get_cfa(state, i.cfa());
         println!("get_caller: cfa={:#x}", cfa);
@@ -245,7 +256,7 @@ impl DebugPool {
         // Not sure if this is documented, but it seems to work
         println!("> RSP = CFA {:#x}", cfa);
         rv.gprs[7] = cfa;
-        return rv;
+        Some(rv)
     }
 
     

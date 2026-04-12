@@ -44,8 +44,38 @@ impl ::std::fmt::Display for CpuState {
 }
 
 fn main() {
-    let path = ::std::env::args().nth(1).expect("pass a core dump");
-    let dump = core_dump::CoreDump::open(path.as_ref()).expect("Unable to open core dump");
+    struct Args {
+        path: ::std::path::PathBuf,
+        variables: Vec<Variable>,
+    }
+    struct Variable {
+        fcn_name: String,
+        var_name: String,
+        visited: bool,
+    }
+    impl Variable {
+        pub fn new(fcn: &str, var: &str) -> Self {
+            Self { fcn_name: fcn.to_owned(), var_name: var.to_owned(), visited: false }
+        }
+    }
+    let mut args = {
+        let mut it = ::std::env::args();
+        it.next();   // Executable name
+        let path = it.next().expect("pass a core dump");
+        let mut args = Args { path: path.into(), variables: Vec::new() };
+        for a in it {
+            let (fcn, var) = a.split_once("/").expect("Variable names must be of format `<fcn>/<var>`");
+            args.variables.push(Variable::new(fcn, var));
+        }
+        // TODO: Error if nothing passed?
+        if args.variables.is_empty() {
+            args.variables.push(Variable::new("main","crate"));
+        }
+        args
+    };
+    // Open the dump
+    let dump = core_dump::CoreDump::open(args.path.as_ref()).expect("Unable to open core dump");
+    // Load debug information for referenced modules
     let mut debug = debug_info::DebugPool::new();
     for f in dump.modules()
     {
@@ -56,16 +86,40 @@ fn main() {
         }
     }
     debug.index_types();
-    
-    let state_in_dump = dump.get_thread(0);
-    println!("STATE: {}", state_in_dump);
-    let state_main = debug.get_caller(&state_in_dump, &dump);
-    println!("STATE: {}", state_main);
 
-    let (addr, ty) = debug.get_variable(&state_main, &dump, "crate");
     let input = Input { debug: &debug, dump: &dump };
     let mut output = Output::default();
-    visit_type(&input, &mut output, 0, debug.get_type(&ty), addr, Path::root());
+    
+    // Only conisder thread 0
+    let mut state = dump.get_thread(0).clone();
+    loop {
+        let sym = debug.resolve_symbol(state.pc);
+        println!("STATE: @{:x?} {}", sym, state);
+        if let Some((name,_)) = sym {
+            for v in args.variables.iter_mut() {
+                if v.fcn_name == name {
+                    let (addr, ty) = debug.get_variable(&state, &dump, &v.var_name);
+                    visit_type(&input, &mut output, 0, debug.get_type(&ty), addr, Path::root());
+                    v.visited = true;
+                }
+            }
+            if args.variables.iter().all(|v| v.visited) {
+                break
+            }
+        }
+        if let Some(ns) = debug.get_caller(&state, &dump) {
+            state = ns;
+        }
+        else {
+            break;
+        }
+    }
+    for v in args.variables.iter() {
+        if !v.visited {
+            eprintln!("Failed to find function for {} / {}", v.fcn_name, v.var_name)
+        }
+    }
+
     eprintln!("enum counts: {:#?}", output.enum_variant_counts);
     eprintln!("top-level type counts: {:#?}", output.root_type_counts);
     eprintln!("annotated usage: {:#?}", output.usage);

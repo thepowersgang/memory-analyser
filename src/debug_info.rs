@@ -13,7 +13,7 @@ impl DebugPool {
     pub fn index_types(&mut self) {
         self.0.index_types();
     }
-    pub fn get_caller(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump) -> crate::CpuState {
+    pub fn get_caller(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump) -> Option<crate::CpuState> {
         self.0.get_caller(state, memory)
     }
     pub fn get_variable(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump, name: &str) -> (u64, TypeRef) {
@@ -33,6 +33,11 @@ impl DebugPool {
         self.0.fmt_type_ref(ty)
     }
 
+    /// Look up a symbol for the provided address, returning the symbol name and offset from the start
+    pub fn resolve_symbol(&self, addr: u64) -> Option<(&str,u64)> {
+        self.0.resolve_symbol(addr)
+    }
+    /// Find a type by looking for a matching vtable
     pub fn find_type_by_vtable(&self, addr: u64) -> Option<&Type> {
         self.0.find_type_by_vtable(addr)
     }
