@@ -3,6 +3,8 @@ use super::core_dump::CoreDump;
 use super::debug_info::Type;
 use super::visit_helpers::Path;
 
+pub mod rust;
+
 pub struct CppUniquePtr<'d> {
     pub target_addr: u64,
     pub target_ty: &'d Type,

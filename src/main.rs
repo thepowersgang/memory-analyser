@@ -390,6 +390,20 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             return ;
         }
 
+        // --- rust types ---
+        if let Some(v) = type_handlers::rust::AllocVec::opt_read(input, ty, addr) {
+            let inner_size = input.debug.size_of(v.item_ty);
+            assert!(v.begin <= v.end && v.end <= v.alloc_end);
+            for (i,a) in (v.begin .. v.end).step_by(inner_size).enumerate() {
+                output.claim(input, &path.index(i), a, v.item_ty);
+                visit_type(input, output, depth+1, v.item_ty, a, path.index(i));
+            }
+            return ;
+        }
+        if let Some(_) = type_handlers::rust::HashbrownMap::opt_read(input, ty, addr) {
+            todo!("hashbrown hashmap")
+        }
+
         if let Some(tu) = type_handlers::MrustcTaggedUnion::opt_read(input, ty, addr) {
             if false {
                 print!("TU: "); dump_type_fields(input.debug, ty, 0); println!("");

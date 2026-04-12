@@ -191,6 +191,12 @@ impl DebugPool {
         }
         None
     }
+    pub fn find_type_by_name(&self, name: &str) -> Option<&Type> {
+        match self.type_name_map.get(name) {
+        Some(t) => Some(self.get_type(&t[0].1)),
+        None => None,
+        }
+    }
 
     fn get_unwind<'ctxt>(&self, ctx: &'ctxt mut ::gimli::UnwindContext<usize>, address: u64) -> Option<&'ctxt ::gimli::UnwindTableRow<usize>> {
         for (base, eh_base, info) in &self.backtrace_data {

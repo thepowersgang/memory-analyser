@@ -41,6 +41,10 @@ impl DebugPool {
     pub fn find_type_by_vtable(&self, addr: u64) -> Option<&Type> {
         self.0.find_type_by_vtable(addr)
     }
+    /// Find a type by the human-readable/debug name
+    pub fn find_type_by_name(&self, name: &str) -> Option<&Type> {
+        self.0.find_type_by_name(name)
+    }
 }
 
 pub enum VariableLocation {
