@@ -99,7 +99,11 @@ fn main() {
             for v in args.variables.iter_mut() {
                 if v.fcn_name == name {
                     let (addr, ty) = debug.get_variable(&state, &dump, &v.var_name);
-                    visit_type(&input, &mut output, 0, debug.get_type(&ty), addr, Path::root());
+                    match addr
+                    {
+                    debug_info::VariableLocation::IntegerRegister(_) => todo!(),
+                    debug_info::VariableLocation::Memory(addr) => visit_type(&input, &mut output, 0, debug.get_type(&ty), addr, Path::root()),
+                    }
                     v.visited = true;
                 }
             }

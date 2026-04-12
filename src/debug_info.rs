@@ -16,7 +16,7 @@ impl DebugPool {
     pub fn get_caller(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump) -> Option<crate::CpuState> {
         self.0.get_caller(state, memory)
     }
-    pub fn get_variable(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump, name: &str) -> (u64, TypeRef) {
+    pub fn get_variable(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump, name: &str) -> (VariableLocation, TypeRef) {
         self.0.get_variable(state, memory, name)
     }
     pub fn get_type(&self, ty: &TypeRef) -> &Type {
@@ -41,6 +41,11 @@ impl DebugPool {
     pub fn find_type_by_vtable(&self, addr: u64) -> Option<&Type> {
         self.0.find_type_by_vtable(addr)
     }
+}
+
+pub enum VariableLocation {
+    Memory(u64),
+    IntegerRegister(u64),
 }
 
 #[derive(Clone, Copy)]

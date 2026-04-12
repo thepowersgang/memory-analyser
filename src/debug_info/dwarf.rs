@@ -260,10 +260,10 @@ impl DebugPool {
     }
 
     
-    fn evaluate_position(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump, pos: &VariablePosition, fcn_rec: &FunctionRecord) -> u64 {
+    fn evaluate_position(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump, pos: &VariablePosition, fcn_rec: &FunctionRecord) -> super::VariableLocation {
         match pos {
         VariablePosition::OptimisedOut => todo!("Optimsed out variable"),
-        VariablePosition::Fixed(p) => *p,
+        VariablePosition::Fixed(p) => super::VariableLocation::Memory(*p),
         VariablePosition::Expr(items, encoding) => {
             let r = ::gimli::EndianReader::new(items.as_slice(), ::gimli::NativeEndian);
             let e = ::gimli::read::Expression(r);
@@ -279,11 +279,12 @@ impl DebugPool {
                 E::Complete => {
                     let r= e.result();
                     assert!(r.len() == 1, "Multiple (or zero) pieces? {:?}", r);
-                    match r[0].location
-                    {
-                    gimli::Location::Address { address } => break address,
-                    a @ _ => todo!("Location: {:?}", a),
-                    }
+                    break match r[0].location
+                        {
+                        gimli::Location::Address { address } => super::VariableLocation::Memory(address),
+                        gimli::Location::Register { register } => super::VariableLocation::IntegerRegister(get_register(state, &register)),
+                        a @ _ => todo!("Location: {:?}", a),
+                        }
                     },
                 E::RequiresMemory { address, size, space, base_type: _ } => {
                     assert!(space.is_none(), "Handle address spaces: space={:?}", space);
@@ -294,7 +295,11 @@ impl DebugPool {
                 },
                 E::RequiresRegister { register, base_type: _ }
                     => e.resume_with_register(::gimli::Value::U64(get_register(state, &register))),
-                E::RequiresFrameBase => e.resume_with_frame_base(self.evaluate_position(state, memory, &fcn_rec.frame_base, fcn_rec)),
+                E::RequiresFrameBase => match self.evaluate_position(state, memory, &fcn_rec.frame_base, fcn_rec)
+                    {
+                    super::VariableLocation::Memory(a) => e.resume_with_frame_base(a),
+                    super::VariableLocation::IntegerRegister(iv) => e.resume_with_frame_base(iv),   // is this right?
+                    },
                 E::RequiresTls(_) => todo!("RequiresTls"),
                 E::RequiresCallFrameCfa => {
                     let mut context = ::gimli::UnwindContext::new();
@@ -318,7 +323,7 @@ impl DebugPool {
     }
 
     // Get the storage address of a variable
-    pub fn get_variable(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump, name: &str) -> (u64, TypeRef) {
+    pub fn get_variable(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump, name: &str) -> (super::VariableLocation, TypeRef) {
         let pc = state.get_pc();
         let Some((fcn_name,fcn_rec)) = self.functions.iter().find(|(_,r)| r.pc_range.contains(pc)) else {
             panic!("get_variable: {:?} - Failed to find function for PC={:#x} ({})", name, pc, self.functions.len())
