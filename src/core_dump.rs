@@ -76,6 +76,11 @@ impl CoreDump {
         self.read_bytes(addr, &mut v);
         u32::from_le_bytes(v)
     }
+    pub fn read_u8(&self, addr: u64) -> u8 {
+        let mut v = [0; 1];
+        self.read_bytes(addr, &mut v);
+        v[0]
+    }
 }
 
 /// Common representation of a mapped (named) file in the core dump

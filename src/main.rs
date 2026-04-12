@@ -336,7 +336,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
                 // Inline string, so don't claim the memory (buffer already claimed)
             }
             else {
-                output.claim_raw(&path.deref(), s.ptr, s.len - s.ptr, true);
+                output.claim_raw(&path.deref(), s.ptr, s.len, true);
             }
             return ;
         }
@@ -391,6 +391,18 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         }
 
         // --- rust types ---
+        if let Some(s) = type_handlers::rust::AllocString::opt_read(input, ty, addr) {
+            // TODO: Get string data, and check for duplicates?
+            if s.ptr != 0 {
+                let mut buf = [0; 16];
+                let (str,t): (ByteStr<'_>, &str) = read_str(input.dump, s.ptr, s.len, &mut buf);
+                println!("{:depth$}{} = {:?}{} (alloc String cap={})", "", path.deref(), str, t, s.cap);
+            }
+            if s.ptr != 0 {
+                output.claim_raw(&path.deref(), s.ptr, s.len, true);
+            }
+            return ;
+        }
         if let Some(v) = type_handlers::rust::AllocVec::opt_read(input, ty, addr) {
             let inner_size = input.debug.size_of(v.item_ty);
             assert!(v.begin <= v.end && v.end <= v.alloc_end);
@@ -400,8 +412,15 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             }
             return ;
         }
-        if let Some(_) = type_handlers::rust::HashbrownMap::opt_read(input, ty, addr) {
-            todo!("hashbrown hashmap")
+        if let Some(mut m) = type_handlers::rust::HashbrownMap::opt_read(input, ty, addr) {
+            // TODO: Claim the entire allocation?
+            let mut i = 0;
+            while let Some(a) = m.next(input) {
+                output.claim(input, &path.index(i), a, m.item_ty);
+                visit_type(input, output, depth+1, m.item_ty, a, path.index(i));
+                i += 1;
+            }
+            return ;
         }
 
         if let Some(tu) = type_handlers::MrustcTaggedUnion::opt_read(input, ty, addr) {
