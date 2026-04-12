@@ -46,18 +46,21 @@ impl super::DebugPool
                     ct: CompositeType,
                     ty: TypeRef,
                     is_union: bool,
-                    enum_data: Option<(EnumData, Vec<(::gimli::UnitOffset<usize>, usize, usize,)>,)>,
+                    enum_data: Option<EnumData>,
                     field_refs: Vec<::gimli::UnitOffset<usize>>,
                 }
                 struct EnumData {
                     discr_ref: Option<::gimli::UnitOffset<usize>>,
                     variants: Vec<crate::debug_info::EnumVariant>,
+                    top_fields: Vec<CompositeField>,
+                    offsets: Vec<::gimli::UnitOffset<usize>>,
                 }
                 enum State {
                     Root,
                     Namespace(String),
                     InType(TypeData),
-                    EnumVariants(EnumData, Vec<CompositeField>, Vec<(::gimli::UnitOffset<usize>, usize, usize,)>),
+                    EnumVariants(EnumData),
+                    EnumVariant(crate::debug_info::EnumVariant),
                     InFunction(String, FunctionRecord),
                     // Should only exist underneath a `InFunction`
                     FcnScope(PcRanges),
@@ -69,6 +72,7 @@ impl super::DebugPool
                         Self::Namespace(name) => f.debug_tuple("NamedScope").field(name).finish(),
                         Self::InType(TypeData { ct, .. }) => f.debug_tuple("InType").field(&ct).finish(),
                         Self::EnumVariants(..) => f.debug_tuple("EnumVariants").finish(),
+                        Self::EnumVariant(..) => f.debug_tuple("EnumVariant").finish(),
                         Self::InFunction(name, ..) => f.debug_tuple("InFunction").field(name).finish(),
                         Self::FcnScope(arg0) => f.debug_tuple("FcnScope").field(arg0).finish(),
                         }
@@ -83,6 +87,7 @@ impl super::DebugPool
                         State::FcnScope(..) => {},
                         State::InType(TypeData { ct, .. }) => return Some(&ct.name),
                         State::EnumVariants(..) => {},
+                        State::EnumVariant(..) => {},
                         }
                     }
                     None
@@ -117,13 +122,13 @@ impl super::DebugPool
                                     }
                                     println!(" }}");
                                 }
-                                self.types[td.ty.0] = Some(if let Some((enum_data,offsets)) = td.enum_data {
+                                self.types[td.ty.0] = Some(if let Some(enum_data) = td.enum_data {
                                         print!("enum {}: {{", td.ct.name);
                                         for f in &td.ct.fields {
                                             print!(" {}: {:?},", f.name, f.ty);
                                         }
                                         for v in &enum_data.variants {
-                                            print!(" {}: {{", v.name);
+                                            print!(" []{{");
                                             for f in &v.fields {
                                                 print!(" {}: {:?},", f.name, f.ty);
                                             }
@@ -135,9 +140,9 @@ impl super::DebugPool
                                                 match td.field_refs.iter().position(|v| *v == a)
                                                 {
                                                 Some(i) => Some(td.ct.fields[i].offset),
-                                                None => match offsets.iter().find(|(o,_,_)| *o == a)
+                                                None => match enum_data.offsets.iter().position(|v| *v == a)
                                                     {
-                                                    Some(&(_, v,f)) => Some(enum_data.variants[v].fields[f].offset),
+                                                    Some(i) => Some(enum_data.top_fields[i].offset),
                                                     None => panic!(""),
                                                     },
                                                 }
@@ -157,10 +162,13 @@ impl super::DebugPool
                                         Type::Struct(td.ct)
                                     });
                             }
-                            State::EnumVariants(enm, d, offsets) => {
-                                assert!(d.is_empty(), "{:?}", d);
+                            State::EnumVariants(enm) => {
                                 let Some(State::InType(td)) = stack.last_mut() else { panic!() };
-                                td.enum_data = Some((enm,offsets));
+                                td.enum_data = Some(enm);
+                            },
+                            State::EnumVariant(ev) => {
+                                let Some(State::EnumVariants(enum_data, ..)) = stack.last_mut() else { panic!() };
+                                enum_data.variants.push(ev);
                             },
                             _ => {},
                             }
@@ -523,15 +531,15 @@ impl super::DebugPool
                                         gimli::AttributeValue::UnitRef(o) => o,
                                         _ => panic!("DW_AT_discr should be a UnitRef, got {:?}", v),
                                     });
-                                stack.push(State::EnumVariants(EnumData { discr_ref, variants: Vec::new() }, Vec::new(), Vec::new()));
+                                println!("DW_TAG_variant_part: {:?} in {}", v, td.ct.name);
+                                stack.push(State::EnumVariants(EnumData { discr_ref, variants: Vec::new(), top_fields: Vec::new(), offsets: Vec::new() }));
                             },
                             _ => todo!("InType: {:x?}", v),
                             }
                         },
-                        State::EnumVariants(enum_data, fields, field_offsets) => match v.tag()
+                        State::EnumVariants(enum_data) => match v.tag()
                             {
                             gimli::DW_TAG_variant => {
-                                let name = get_name(&debug_info, &unit, v);
                                 let discr_vals = if let Some(v) = v.attr_value(gimli::DW_AT_discr_value) {
                                     use crate::debug_info::VariantDiscr;
                                     let v = match v {
@@ -550,15 +558,10 @@ impl super::DebugPool
                                 else {
                                     vec![]
                                 };
-                                enum_data.variants.push(crate::debug_info::EnumVariant {
-                                    name: match name
-                                        {
-                                        Some(name) => name.to_owned(),
-                                        None => format!("_#{}", v.offset.0),
-                                        },
+                                stack.push(State::EnumVariant(crate::debug_info::EnumVariant {
                                     discr_vals,
-                                    fields: ::std::mem::take(fields),
-                                });
+                                    fields: Vec::new(),
+                                }));
                             },
                             gimli::DW_TAG_member => {
                                 let name = get_name(&debug_info, &unit, v);
@@ -569,8 +572,8 @@ impl super::DebugPool
                                     };
                                 let ty = self.get_typeref_from_attr(unit_index, v);
                                 //println!("> V MEMBER {name:?} @ {offset:?}: {ty:?} {v:?}");
-                                field_offsets.push((v.offset, enum_data.variants.len(), fields.len(),));
-                                fields.push(CompositeField {
+                                enum_data.offsets.push(v.offset);
+                                enum_data.top_fields.push(CompositeField {
                                     name: match name
                                         {
                                         Some(name) => name.to_owned(),
@@ -579,10 +582,31 @@ impl super::DebugPool
                                     ty: ty.unwrap(),
                                     offset,
                                 });
-                                // TODO:
                             },
-                            _ => todo!("EnumVariants: {:x?}", v),   
+                            _ => todo!("EnumVariants: {:x?}", v),
                             },
+                        State::EnumVariant(var) => match v.tag
+                            {
+                            gimli::DW_TAG_member => {
+                                let name = get_name(&debug_info, &unit, v);
+                                let offset = match v.attr_value(gimli::DW_AT_data_member_location)
+                                    {
+                                    None => panic!("no offset in enum member?"),
+                                    Some(v) => v.udata_value().unwrap(),
+                                    };
+                                let ty = self.get_typeref_from_attr(unit_index, v);
+                                var.fields.push(CompositeField {
+                                    name: match name
+                                        {
+                                        Some(name) => name.to_owned(),
+                                        None => format!("_#{}", v.offset.0),
+                                        },
+                                    ty: ty.unwrap(),
+                                    offset,
+                                });
+                                },
+                            _ => todo!("EnumVariant: {:x?}", v),
+                            }
                         }
                     }
                 }

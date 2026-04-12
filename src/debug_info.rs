@@ -155,7 +155,6 @@ pub struct Enum {
 }
 #[derive(Debug)]
 pub struct EnumVariant {
-    pub name: String,
     pub discr_vals: Vec<VariantDiscr>,
     pub fields: Vec<crate::debug_info::CompositeField>,
 }

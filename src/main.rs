@@ -556,7 +556,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             }
             variants.iter().find(|v| v.discr_vals.is_empty())
         }
-        print!("Varianted: "); dump_type_fields(input.debug, ty, 0); println!("");
+        //print!("Varianted: "); dump_type_fields(input.debug, ty, 0); println!("");
         for f in &e.outer.fields {
             visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
         }
@@ -567,11 +567,12 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             e.variants.first()
         };
         if let Some(v) = variant {
-            println!("Matched variant {}", v.name);
+            let vi = unsafe { (v as *const debug_info::EnumVariant).offset_from_unsigned(e.variants.as_ptr()) };
+            //println!("Matched {} #{vi}", e.outer.name());
             // TODO: Record the variant in the stats for this type
             // Recurse
-            for f in &e.outer.fields {
-                visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.field(&v.name).field(&f.name));
+            for f in &v.fields {
+                visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.index(vi).field(&f.name));
             }
         }
         else {
