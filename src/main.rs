@@ -127,7 +127,7 @@ fn main() {
     eprintln!("enum counts: {:#?}", output.enum_variant_counts);
     eprintln!("top-level type counts: {:#?}", output.root_type_counts);
     eprintln!("annotated usage: {:#?}", output.usage);
-    eprintln!("{} KiB covered (out of {} KiB)", output.used_memory.calculate_usage() / 1024, dump.anon_size() / 1024)
+    eprintln!("{} KiB covered (out of {} KiB)", output.used_memory.calculate_usage().div_ceil(1024), dump.anon_size().div_ceil(1024))
 }
 
 /// Dump the immediate fields of a structure (all direct data)
@@ -422,6 +422,10 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             }
             return ;
         }
+        if let Some(p) = type_handlers::rust::AllocRc::opt_read(input, ty, addr) {
+            visit_type(input, output, depth+1, p.inner_ty, p.addr, path.deref());
+            return ;
+        }
 
         if let Some(tu) = type_handlers::MrustcTaggedUnion::opt_read(input, ty, addr) {
             if false {
@@ -552,7 +556,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             }
             variants.iter().find(|v| v.discr_vals.is_empty())
         }
-        dump_type_fields(input.debug, ty, 0);
+        print!("Varianted: "); dump_type_fields(input.debug, ty, 0); println!("");
         for f in &e.outer.fields {
             visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
         }
@@ -563,6 +567,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             e.variants.first()
         };
         if let Some(v) = variant {
+            println!("Matched variant {}", v.name);
             // TODO: Record the variant in the stats for this type
             // Recurse
             for f in &e.outer.fields {

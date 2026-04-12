@@ -2,6 +2,32 @@ use crate::Input;
 use crate::visit_helpers::Path;
 use crate::debug_info::Type;
 
+pub struct AllocRc<'d> {
+    pub inner_ty: &'d Type,
+    pub addr: u64,
+}
+impl<'d> AllocRc<'d> {
+    pub fn opt_read(input: &Input<'d>, ty: &Type, addr: u64) -> Option<Self> {
+        let Type::Struct(composite_type) = ty else {
+            return None;
+        };
+        if !composite_type.name().starts_with("alloc::rc::Rc<") {
+            return None;
+        }
+        let (ptr_o, ptr_ty) = input.get_field(ty, Path::root().field("ptr").field("pointer"));
+        let inner_ty = {
+            let i = input.resolve_alias_chain_tr(&ptr_ty);
+            let Type::Pointer(i, _) = i else { panic!("Expected pointer") };
+            input.resolve_alias_chain_tr(i)
+        };
+
+        Some(Self {
+            inner_ty,
+            addr: input.dump.read_ptr(addr + ptr_o),
+            })
+    }
+}
+
 pub struct AllocString
 {
     pub ptr: u64,
