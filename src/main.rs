@@ -124,8 +124,33 @@ fn main() {
         }
     }
 
-    eprintln!("enum counts: {:#?}", output.enum_variant_counts);
-    eprintln!("top-level type counts: {:#?}", output.root_type_counts);
+    eprintln!("enum counts: {{");
+    for (t,vals) in {
+        let mut v: Vec<_> = output.enum_variant_counts.iter()
+            .map(|(k,v)| (k, v.iter().collect::<Vec<_>>()))
+            .collect();
+        v.sort_by_key(|(k,v)| (v.iter().map(|(_,b)| *b).sum::<usize>(),&k[..]));
+        v.iter_mut().for_each(|(_,v)| v.sort_by_key(|(k,v)| (*v,&k[..])));
+        v
+    }
+    {
+        eprintln!("  {t:?}: {{");
+        for (k,v) in vals {
+            eprintln!("    {k:?}: {v},");
+        }
+        eprintln!("  }}");
+    }
+    eprintln!("}}");
+    eprintln!("top-level type counts: {{");
+    for (k,v) in {
+        let mut v: Vec<_> = output.root_type_counts.iter().collect();
+        v.sort_by_key(|(k,v)| (*v,&k[..]));
+        v
+    }
+    {
+        eprintln!("  {k:?}: {v},");
+    }
+    eprintln!("}}");
     eprintln!("annotated usage: {:#?}", output.usage);
     eprintln!("{} KiB covered (out of {} KiB)", output.used_memory.calculate_usage().div_ceil(1024), dump.anon_size().div_ceil(1024))
 }
