@@ -89,7 +89,7 @@ fn main() {
 
     let input = Input { debug: &debug, dump: &dump };
     let mut output = Output::default();
-    
+
     // Only conisder thread 0
     let mut state = dump.get_thread(0).clone();
     loop {
@@ -102,7 +102,7 @@ fn main() {
                     match addr
                     {
                     debug_info::VariableLocation::IntegerRegister(_) => todo!(),
-                    debug_info::VariableLocation::Memory(addr) => visit_type(&input, &mut output, 0, debug.get_type(&ty), addr, Path::root()),
+                    debug_info::VariableLocation::Memory(addr) => visit_type(&input, &mut output, 0, debug.get_type(&ty), addr, Path::root().field(&v.var_name)),
                     }
                     v.visited = true;
                 }
@@ -293,7 +293,7 @@ impl Output {
         if path.len() > 0 {
             *self.usage.entry(String::new()).or_default() += size;
         }
-        let mut path = path.get_prefix(3);
+        let mut path = path.get_prefix(4);
         loop {
             *self.usage.entry(format!("{}", path)).or_default() += size;
             if let Some(p) = path.get_parent() {
