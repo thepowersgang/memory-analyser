@@ -37,7 +37,7 @@ impl DebugPool {
     pub fn resolve_symbol(&self, addr: u64) -> Option<(&str,u64)> {
         self.0.resolve_symbol(addr)
     }
-    /// Find a type by looking for a matching vtable
+    /// Find a type by looking for a matching VTable
     pub fn find_type_by_vtable(&self, addr: u64) -> Option<&Type> {
         self.0.find_type_by_vtable(addr)
     }
@@ -89,8 +89,8 @@ pub struct TypeRef(usize);
 pub enum Type {
     Struct(CompositeType),
     Union(CompositeType),
-    Varianted(Enum),
-    Primtive(PrimitiveType),
+    TaggedUnion(Enum),
+    Primitive(PrimitiveType),
     Pointer(TypeRef, PointerClass, String),
     Alias(TypeRef),
     Enum(String),

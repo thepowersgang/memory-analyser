@@ -77,7 +77,7 @@ impl CoreDump {
                     let sp = get_u64(&mut slice);
                     threads.push(crate::CpuState {
                         pc: ip,
-                        gprs: [
+                        gp_registers: [
                             ax, dx, cx, bx, si, di, bp, sp,
                             r8, r9, r10, r11, r12, r13, r14, r15,
                         ],
@@ -115,15 +115,15 @@ impl CoreDump {
                     // Find the lowest `v_start` for each file
                     for f in files {
                         if let Some(v) = modules.iter_mut().find(|v| v.path == f.path) {
-                            if v.virt_base > f.v_start {
-                                v.virt_base = f.v_start;
+                            if v.load_base > f.v_start {
+                                v.load_base = f.v_start;
                                 v.file_base = f.ofs;
                             }
                         }
                         else {
                             modules.push(super::ReferencedFile {
                                 file_base: f.ofs,
-                                virt_base: f.v_start,
+                                load_base: f.v_start,
                                 path: f.path.to_owned(),
                             });
                         }

@@ -19,7 +19,7 @@ mod type_handlers;
 struct CpuState {
     // AMD64:
     pc: u64,
-    gprs: [u64; 16],
+    gp_registers: [u64; 16],
 }
 impl CpuState {
     fn get_pc(&self) -> u64 {
@@ -30,7 +30,7 @@ impl ::std::fmt::Display for CpuState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "PC={:#x}", self.pc)?;
         const GPR_NAMES: [&str;16] = ["RAX","RDX","RCX","RBX", "RSI","RDI","RBP","RSP", "R8","R9","R10","R11", "R12","R12","R14","R15"];
-        for (i,(n,v)) in GPR_NAMES.iter().zip(self.gprs.iter()).enumerate() {
+        for (i,(n,v)) in GPR_NAMES.iter().zip(self.gp_registers.iter()).enumerate() {
             if i % 4 == 0 {
                 f.write_str("\n")?;
             }
@@ -79,7 +79,7 @@ fn main() {
     let mut debug = debug_info::DebugPool::new();
     for f in dump.modules()
     {
-        match debug.add_file(&f.path, f.virt_base, f.file_base)
+        match debug.add_file(&f.path, f.load_base, f.file_base)
         {
         Ok(()) => {},
         Err(e) => panic!("Failed to load {:?}: {:?}", f.path, e),
@@ -185,7 +185,7 @@ fn dump_type_fields(debug: &debug_info::DebugPool, ty: &debug_info::Type, ofs: u
         }
         print!(" }}");
     },
-    debug_info::Type::Varianted(e) => {
+    debug_info::Type::TaggedUnion(e) => {
         print!("enum {} {{", e.outer.name());
         for f in e.outer.iter_fields() {
             print!(" {}: ", f.name);
@@ -309,7 +309,7 @@ impl Output {
 fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path) {
     let ty = input.resolve_alias_chain(ty);
 
-    // Handle virtual types by detecting the presense of a vtable field, then looking up its value
+    // Handle virtual types by detecting the presence of a vtable field, then looking up its value
     let ty = if let debug_info::Type::Struct(ct) = ty {
         if ct.fields.len() > 0 && ct.fields[0].name.starts_with("_vptr.") {
             let vptr = input.dump.read_ptr(addr + ct.fields[0].offset);
@@ -544,7 +544,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         }
         visit_ct_inner(input, output, depth, composite_type, addr, path)
     },
-    debug_info::Type::Varianted(e) => {
+    debug_info::Type::TaggedUnion(e) => {
         fn find_variant<'a>(input: &Input, variants: &'a [debug_info::EnumVariant], discr_addr: u64) -> Option<&'a debug_info::EnumVariant> {
             for var in variants.iter() {
                 for dv in var.discr_vals.iter() {
@@ -581,7 +581,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             }
             variants.iter().find(|v| v.discr_vals.is_empty())
         }
-        //print!("Varianted: "); dump_type_fields(input.debug, ty, 0); println!("");
+        //print!("TaggedUnion: "); dump_type_fields(input.debug, ty, 0); println!("");
         for f in &e.outer.fields {
             visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
         }
@@ -615,7 +615,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
     },
     debug_info::Type::Array(..) => todo!("visit_type: array"),
     debug_info::Type::Enum(_) => {},
-    debug_info::Type::Primtive(_) => {},
+    debug_info::Type::Primitive(_) => {},
     debug_info::Type::Pointer(dst_ty, _, name) => {
         let addr = input.dump.read_ptr(addr);
         println!("{:depth$}->{:#x}", "", addr);

@@ -87,7 +87,7 @@ impl CoreDump {
 /// 
 /// Used to get debug information
 pub struct ReferencedFile {
-    pub virt_base: u64,
+    pub load_base: u64,
     pub file_base: u64,
     pub path: ::std::path::PathBuf,
 }

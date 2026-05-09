@@ -1,9 +1,13 @@
+//! Convert DWARF debug information (from the `gimli` crate) into internal structures
+// cspell:ignore Gimli TypeRef
 use super::super::{TypeRef, Type, CompositeType, CompositeField};
 use super::{FunctionRecord, PcRanges, PcRange, VariableRecord, VariablePosition, VariableRange};
 
+type Input<'a> = ::gimli::EndianSlice<'a, ::gimli::LittleEndian>;
+
 impl super::DebugPool
 {
-    fn get_typeref_from_attr(&mut self, unit_index: usize, v: &::gimli::DebuggingInformationEntry<::gimli::EndianSlice<::gimli::LittleEndian>>) -> Option<TypeRef>
+    fn get_typeref_from_attr(&mut self, unit_index: usize, v: &::gimli::DebuggingInformationEntry<Input>) -> Option<TypeRef>
     {
         match v.attr_value(::gimli::DW_AT_type)
         {
@@ -15,11 +19,9 @@ impl super::DebugPool
                 }),
         }
     }
-    pub(super) fn add_variables_types_from_dwarf(&mut self, load_base: u64, debug_info: &::gimli::Dwarf<::gimli::EndianSlice<::gimli::LittleEndian>>)
+    pub(super) fn add_variables_types_from_dwarf(&mut self, load_base: u64, debug_info: &::gimli::Dwarf<Input>)
     {
-        fn get_name<'a, E>(debug_info: &::gimli::Dwarf<::gimli::EndianSlice<'a, E>>, unit: &gimli::Unit<::gimli::EndianSlice<'a, E>>, v: &::gimli::DebuggingInformationEntry<::gimli::EndianSlice<'a, E>>) -> Option<&'a str>
-        where
-            E: ::gimli::Endianity,
+        fn get_name<'a>(debug_info: &::gimli::Dwarf<Input<'a>>, unit: &gimli::Unit<Input<'a>>, v: &::gimli::DebuggingInformationEntry<Input<'a>>) -> Option<&'a str>
         {
             match v.attr_value(gimli::DW_AT_name)
             {
@@ -149,7 +151,7 @@ impl super::DebugPool
                                             },
                                             None => None,
                                         };
-                                        Type::Varianted(crate::debug_info::Enum {
+                                        Type::TaggedUnion(crate::debug_info::Enum {
                                             discr_ofs,
                                             outer: td.ct,
                                             variants: enum_data.variants,
@@ -181,8 +183,8 @@ impl super::DebugPool
                             }
                             continue ;
                         }
-                        let get_pc_range = |v: &gimli::DebuggingInformationEntry<::gimli::EndianSlice<::gimli::LittleEndian>>| -> PcRanges {
-                            fn unwrap_addr(v: &::gimli::Attribute<::gimli::EndianSlice<::gimli::LittleEndian>>) -> u64 {
+                        let get_pc_range = |v: &gimli::DebuggingInformationEntry<Input>| -> PcRanges {
+                            fn unwrap_addr(v: &::gimli::Attribute<Input>) -> u64 {
                                 match v.value() {
                                 ::gimli::AttributeValue::Addr(a) => a,
                                 ::gimli::AttributeValue::Udata(a) => a,
@@ -259,7 +261,7 @@ impl super::DebugPool
                                 .map(|v| v.udata_value().unwrap() * 8)
                                 .or(v.attr_value(::gimli::DW_AT_bit_size).map(|v| v.udata_value().unwrap()));
                             //println!("> {ty_ref:?} base type: {:?}", get_name(&debug_info, &unit, v));
-                            self.types[ty_ref.0] = Some(Type::Primtive(super::super::PrimitiveType {
+                            self.types[ty_ref.0] = Some(Type::Primitive(super::super::PrimitiveType {
                                 bits: size_bits.expect("No size?") as u32,
                                 name: get_scoped_name(&stack, "prim", get_name(&debug_info, &unit, v), v.offset),
                             }));

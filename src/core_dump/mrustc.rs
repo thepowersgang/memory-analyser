@@ -84,13 +84,13 @@ impl CoreDump {
             if name != "" && name.starts_with("/") {
                 // Add the module
                 if let Some(v) = modules.iter_mut().find(|v| v.path == name) {
-                    if hdr.v_start < v.virt_base {
-                        v.virt_base = hdr.v_start;
+                    if hdr.v_start < v.load_base {
+                        v.load_base = hdr.v_start;
                         v.file_base = hdr.file_ofs;
                     }
                 }
                 else {
-                    modules.push(super::ReferencedFile { virt_base: hdr.v_start, file_base: hdr.file_ofs, path: name.into() });
+                    modules.push(super::ReferencedFile { load_base: hdr.v_start, file_base: hdr.file_ofs, path: name.into() });
                 }
             }
         }
@@ -116,7 +116,7 @@ impl CoreDump {
         for _ in 0 .. 1 {
             threads.push(crate::CpuState {
                 pc: raw::read_u64(&mut fp)?,
-                gprs: [
+                gp_registers: [
                     raw::read_u64(&mut fp)?,
                     raw::read_u64(&mut fp)?,
                     raw::read_u64(&mut fp)?,

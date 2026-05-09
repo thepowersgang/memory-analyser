@@ -141,9 +141,9 @@ impl DebugPool {
                         !(composite_type.fields.is_empty() && composite_type.parents.is_empty())
                     },
                     Type::Enum(_) => true,  // TODO: enums might still be incomplete
-                    Type::Varianted(et) => !et.variants.is_empty(), // These shouldn't be incomplete?
+                    Type::TaggedUnion(et) => !et.variants.is_empty(), // These shouldn't be incomplete?
                     Type::Alias(..)
-                    |Type::Primtive(..)
+                    |Type::Primitive(..)
                     |Type::Pointer(..)
                     |Type::Array(..) => true,
                 };
@@ -243,7 +243,7 @@ impl DebugPool {
             let v = match rule
                 {
                 ::gimli::RegisterRule::Undefined => 0,
-                ::gimli::RegisterRule::SameValue => state.gprs[r_name.0 as usize],
+                ::gimli::RegisterRule::SameValue => state.gp_registers[r_name.0 as usize],
                 ::gimli::RegisterRule::Offset(cfa_ofs) => memory.read_ptr(cfa.wrapping_add_signed(*cfa_ofs)),
                 ::gimli::RegisterRule::ValOffset(cfa_ofs) => cfa.wrapping_add_signed(*cfa_ofs),
                 ::gimli::RegisterRule::Register(register) => get_register(state, register),
@@ -254,14 +254,14 @@ impl DebugPool {
                 };
             println!("> {:?}: {:?} = {:#x}", r_name, rule, v);
             match r_name.0 {
-            i @ 0 .. 16 => rv.gprs[i as usize] = v,
+            i @ 0 .. 16 => rv.gp_registers[i as usize] = v,
             16 => rv.pc = v,
             _ => {},
             }
         }
         // Not sure if this is documented, but it seems to work
         println!("> RSP = CFA {:#x}", cfa);
-        rv.gprs[7] = cfa;
+        rv.gp_registers[7] = cfa;
         Some(rv)
     }
 
@@ -355,8 +355,8 @@ impl DebugPool {
         match ty {
         Type::Struct(composite_type) => composite_type.size,
         Type::Union(composite_type) => composite_type.size,
-        Type::Varianted(et) => et.outer.size,
-        Type::Primtive(primitive_type) => (primitive_type.bits as usize + 7) / 8,
+        Type::TaggedUnion(et) => et.outer.size,
+        Type::Primitive(primitive_type) => (primitive_type.bits as usize + 7) / 8,
         Type::Pointer(..) => 8,
         Type::Alias(type_ref) => self.size_of(self.get_type(type_ref)),
         Type::Enum(_) => todo!("size_of: enum"),
@@ -384,8 +384,8 @@ impl DebugPool {
         Type::Enum(name) => f.write_str(name),
         Type::Struct(composite_type) => f.write_str(&composite_type.name),
         Type::Union(composite_type) => f.write_str(&composite_type.name),
-        Type::Varianted(e) => f.write_str(&e.outer.name),
-        Type::Primtive(primitive_type) => write!(f, "{}[[bits={}]]", primitive_type.name, primitive_type.bits),
+        Type::TaggedUnion(e) => f.write_str(&e.outer.name),
+        Type::Primitive(primitive_type) => write!(f, "{}[[bits={}]]", primitive_type.name, primitive_type.bits),
         Type::Pointer(type_ref, cls, name) => {
             if name != "" {
                 return f.write_str(name);
@@ -433,7 +433,7 @@ impl DebugPool {
 
 fn get_register(state: &crate::CpuState, register: &::gimli::Register) -> u64 {
     match register.0 {
-    i @ 0 .. 16 => state.gprs[i as usize],
+    i @ 0 .. 16 => state.gp_registers[i as usize],
     16 => state.pc,
     _ => todo!("get_register: {:?}", register),
     }
