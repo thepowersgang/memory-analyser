@@ -1,3 +1,5 @@
+// cspell:ignore Gimli demangle
+// cspell:ignore ctxt symtab sdata shdr
 use super::{TypeRef,Type, PointerClass};
 use super::{PcRange,PcRanges};
 
@@ -73,7 +75,7 @@ impl DebugPool {
         println!("{:?} @ {:#x} (from {:#x})", path, base, file_base);
         let mut elf_files = (Vec::new(), Vec::new());
         let elf_files = ElfFiles::open(path, &mut elf_files)?;
-        // Load with ELF loade
+        // Load with ELF loader
         let mut lowest_load = !0;
         for s in elf_files.section_headers() {
             if s.sh_flags & ::elf::abi::SHF_ALLOC as u64 != 0 {
@@ -110,21 +112,21 @@ impl DebugPool {
             Ok(::gimli::EndianSlice::new(section_data, ::gimli::LittleEndian))
         })?;
         self.add_variables_types_from_dwarf(base, &debug_info);
-        // Get vtables from symbol table
+        // Get VTables from symbol table
         if let Some(f) = elf_files.file_debug.as_ref() {
-            self.add_from_symbtab(base, f)?;
+            self.add_from_symtab(base, f)?;
         }
-        self.add_from_symbtab(base, &elf_files.file_main)?;
+        self.add_from_symtab(base, &elf_files.file_main)?;
         println!("LOADED {}", path.display());
         Ok( () )
     }
-    fn add_from_symbtab(&mut self, base: u64, elf: &::elf::ElfBytes<::elf::endian::NativeEndian>) -> Result<(),Box<dyn ::std::error::Error>> {
-        if let Some((symtab, strtab)) = elf.symbol_table()? {
+    fn add_from_symtab(&mut self, base: u64, elf: &::elf::ElfBytes<::elf::endian::NativeEndian>) -> Result<(),Box<dyn ::std::error::Error>> {
+        if let Some((symtab, str_tab)) = elf.symbol_table()? {
             for sym in symtab.iter() {
                 if ! sym.is_undefined() {
                     self.symbols.entry(base + sym.st_value).or_default().push((
                         sym.st_size,
-                        strtab.get(sym.st_name as usize).unwrap().to_owned(),
+                        str_tab.get(sym.st_name as usize).unwrap().to_owned(),
                     ));
                 }
             }
@@ -268,7 +270,7 @@ impl DebugPool {
     
     fn evaluate_position(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump, pos: &VariablePosition, fcn_rec: &FunctionRecord) -> super::VariableLocation {
         match pos {
-        VariablePosition::OptimisedOut => todo!("Optimsed out variable"),
+        VariablePosition::OptimisedOut => todo!("Optimised out variable"),
         VariablePosition::Fixed(p) => super::VariableLocation::Memory(*p),
         VariablePosition::Expr(items, encoding) => {
             let r = ::gimli::EndianReader::new(items.as_slice(), ::gimli::NativeEndian);

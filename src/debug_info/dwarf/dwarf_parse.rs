@@ -1,5 +1,5 @@
 //! Convert DWARF debug information (from the `gimli` crate) into internal structures
-// cspell:ignore Gimli TypeRef
+// cspell:ignore Gimli TypeRef RValue Exprloc Udata bitfields tydef
 use super::super::{TypeRef, Type, CompositeType, CompositeField};
 use super::{FunctionRecord, PcRanges, PcRange, VariableRecord, VariablePosition, VariableRange};
 
