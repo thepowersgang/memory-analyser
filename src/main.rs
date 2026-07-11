@@ -90,7 +90,7 @@ fn main() {
     let input = Input { debug: &debug, dump: &dump };
     let mut output = Output::default();
 
-    // Only conisder thread 0
+    // Only consider thread 0
     let mut state = dump.get_thread(0).clone();
     loop {
         let sym = debug.resolve_symbol(state.pc);
@@ -120,7 +120,8 @@ fn main() {
     }
     for v in args.variables.iter() {
         if !v.visited {
-            eprintln!("Failed to find function for {} / {}", v.fcn_name, v.var_name)
+            eprintln!("Failed to find function for {} / {}", v.fcn_name, v.var_name);
+            eprintln!("> {:#x?}", debug.get_symbol(&v.fcn_name));
         }
     }
 
@@ -266,7 +267,7 @@ struct Output {
     shared_pointers: ::std::collections::BTreeSet<u64>,
 
     /// Type instance counts, only if they're at the top level (i.e. `claim` called with this type)
-    // Not really useful? More intersting to see all composite type counts, to find what takes the most space
+    // Not really useful? More interesting to see all composite type counts, to find what takes the most space
     root_type_counts: ::std::collections::HashMap<String, usize>,
 
     /// Number of instances of each enum variants
@@ -308,6 +309,10 @@ impl Output {
 
 fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path) {
     let ty = input.resolve_alias_chain(ty);
+    if !input.dump.is_valid(addr, 1) {
+        eprintln!("Invalid access at {:#x}", addr);
+        return ;
+    }
 
     // Handle virtual types by detecting the presence of a vtable field, then looking up its value
     let ty = if let debug_info::Type::Struct(ct) = ty {
@@ -351,6 +356,8 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         }
 
         if let Some(s) = type_handlers::CppString::opt_read(input, ty, addr) {
+            assert!(s.capacity == 0 || s.len <= s.capacity, "Malformed std::string - {:#x}+{:#x}(cap={:#x})", s.ptr, s.len, s.capacity);
+            assert!(s.capacity < 0x10_00000);   // 16MiB
             // TODO: Get string data, and check for duplicates?
             if s.ptr != 0 {
                 let mut buf = [0; 16];
@@ -366,12 +373,14 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             return ;
         }
         if let Some(p) = type_handlers::CppUniquePtr::opt_read(input, ty, addr) {
+            println!("{:depth$}->{:#x}", "", p.target_addr);
             if p.target_addr != 0 {
                 visit_type(input, output, depth+1, p.target_ty, p.target_addr, path.deref());
             }
             return ;
         }
         if let Some(p) = type_handlers::CppSharedPtr::opt_read(input, ty, addr) {
+            println!("{:depth$}->{:#x}, c={:#x}", "", p.target_addr, p.count_addr);
             if p.target_addr != 0 && output.shared_pointers.insert(p.target_addr) {
                 visit_type(input, output, depth+1, p.target_ty, p.target_addr, path.field("data").deref());
             }
@@ -381,9 +390,22 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             }
             return ;
         }
+        if composite_type.name().starts_with("std::vector<bool") {
+            // TODO: Claim ownership of pointed-to memory
+            return ;
+        }
         if let Some(v) = type_handlers::CppVector::opt_read(input, ty, addr) {
             let inner_size = input.debug.size_of(v.item_ty);
-            assert!(v.begin <= v.end && v.end <= v.alloc_end);
+            println!("{:depth$}->{:#x}+{:#x}(+{:#x} s={inner_size:#x})", "", v.begin, v.end - v.begin, v.alloc_end - v.begin);
+            if !(v.begin <= v.end && v.end <= v.alloc_end) {
+                eprintln!("Malformed std::vector: {:#x} <= {:#x} <= {:#x}", v.begin, v.end, v.alloc_end);
+                return;
+            }
+            if v.end != v.begin {
+                if !input.dump.is_valid(v.begin, 1) {
+                    return ;
+                }
+            }
             for (i,a) in (v.begin .. v.end).step_by(inner_size).enumerate() {
                 output.claim(input, &path.index(i), a, v.item_ty);
                 visit_type(input, output, depth+1, v.item_ty, a, path.index(i));
@@ -489,6 +511,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             let debug_info::Type::Pointer(inner_ty, ..) = ptr_t else { panic!("Expected pointer, got  {:?}", ptr_t); };
             let inner_ty = input.debug.get_type(inner_ty);
             let ptr_val = input.dump.read_ptr(addr + ptr_o);
+            println!("{:depth$}->{:#x}", "", ptr_val);
             if ptr_val != 0 && output.shared_pointers.insert(ptr_val) {
                 visit_type(input, output, depth+1, inner_ty, ptr_val, path.deref());
             }
@@ -499,6 +522,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             let debug_info::Type::Pointer(inner_ty, ..) = ptr_t else { panic!("Expected pointer, got  {:?}", ptr_t); };
             let inner_ty = input.debug.get_type(inner_ty);
             let ptr_val = input.dump.read_ptr(addr + ptr_o);
+            println!("{:depth$}->{:#x}", "", ptr_val);
             if ptr_val != 0 {
                 visit_type(input, output, depth+1, inner_ty, ptr_val, path.deref());
             }
@@ -509,6 +533,8 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         "RcString" => return,
         // `Span`: A fixed-size reference-counted type
         "Span" => return rc_ptr(input, output, depth, ty, addr, path, Path::root().field("m_ptr")),
+        // `HIR::TypeRef` - Shared pointer to type data
+        "HIR::TypeRef" => return rc_ptr(input, output, depth, ty, addr, path, Path::root().field("m_ptr")),
         // --- Various fixed-size smart pointers ---
         | "MIR::FunctionPointer"
         | "HIR::ExprStatePtr"

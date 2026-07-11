@@ -19,6 +19,7 @@ impl DebugPool {
     pub fn get_variable(&self, state: &crate::CpuState, memory: &crate::core_dump::CoreDump, name: &str) -> (VariableLocation, TypeRef) {
         self.0.get_variable(state, memory, name)
     }
+    #[track_caller]
     pub fn get_type(&self, ty: &TypeRef) -> &Type {
         self.0.get_type(ty)
     }
@@ -33,6 +34,9 @@ impl DebugPool {
         self.0.fmt_type_ref(ty)
     }
 
+    pub fn get_symbol(&self, n: &str) -> Option<(u64, u64)> {
+        self.0.get_symbol(n)
+    }
     /// Look up a symbol for the provided address, returning the symbol name and offset from the start
     pub fn resolve_symbol(&self, addr: u64) -> Option<(&str,u64)> {
         self.0.resolve_symbol(addr)

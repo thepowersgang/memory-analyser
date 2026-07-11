@@ -56,6 +56,16 @@ impl CoreDump {
         }
     }
 
+    pub fn is_valid(&self, addr: u64, len: usize) -> bool {
+        let v = match &self.0 {
+            Inner::MRustc(core_dump) => core_dump.is_valid(addr, len),
+            Inner::Elf(core_dump) => core_dump.is_valid(addr, len),
+            };
+        if !v && true {
+            panic!("Oh noes! Out-of-bounds access {:#x}+{:#x}", addr, len);
+        }
+        v
+    }
     pub fn read_bytes(&self, addr: u64, dst: &mut [u8]) {
         match &self.0 {
         Inner::MRustc(core_dump) => core_dump.read_bytes(addr, dst),

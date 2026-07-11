@@ -1,3 +1,4 @@
+// cspell:ignore MRustC
 use super::Input;
 use super::core_dump::CoreDump;
 use super::debug_info::Type;
@@ -87,6 +88,10 @@ impl<'d> CppVector<'d> {
         if !composite_type.name().starts_with("std::vector<") {
             return None;
         }
+        if composite_type.name().starts_with("std::vector<bool") {
+            // Ignore `vector<bool`
+            return None
+        }
         let inner_ty = {
             let (_, ty) = input.get_field(ty, Path::root().parent(0).field("_M_impl").parent(1).field("_M_start"));
             let ty = input.resolve_alias_chain_tr(&ty);
@@ -128,6 +133,7 @@ impl CppString {
             else {
                 input.dump.read_ptr(addr + 16)
             };
+        //assert!(capacity < )
         Some(CppString {
             ptr,
             len,
@@ -206,7 +212,7 @@ impl CppMapNode {
 
     pub fn next(&self, dump: &CoreDump) -> Self {
         let mut cur_n = *self;
-        // Increment iterator (See `_Rb_tree_increment` implementtion)
+        // Increment iterator (See `_Rb_tree_increment` implementation)
         if cur_n.right_addr != 0 {
             // Iterate into the RHS until no more LHS
             cur_n = Self::read(dump, cur_n.right_addr);
@@ -360,11 +366,15 @@ impl MrustcRcString {
         let Type::Pointer(inner_ty, ..) = input.debug.get_type(&composite_type.fields[0].ty) else { panic!() };
         let inner_ty = input.debug.get_type(inner_ty);
         if false {
-            print!("RCSTRING: "); crate::dump_type_fields(input.debug, inner_ty, 0); println!("");
+            print!("RcString: "); crate::dump_type_fields(input.debug, inner_ty, 0); println!("");
         }
         let (data_ofs, _) = input.get_field(inner_ty, Path::root().field("data"));
         let (size_ofs, _) = input.get_field(inner_ty, Path::root().field("size"));
         let ptr = input.dump.read_ptr(addr);
+        if ptr != 0 && !input.dump.is_valid(ptr + size_ofs, 8) {
+            eprintln!("Invalid pointer in RcString: {:#x}", ptr);
+            return Some(MrustcRcString { data_addr: 0, string_ptr: 0, string_len: 0 })
+        }
         Some(MrustcRcString {
             data_addr: ptr,
             string_ptr: if ptr == 0 { 0 } else { ptr + data_ofs },

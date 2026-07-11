@@ -1,6 +1,6 @@
 //! mrustc-specific core dump loader
 //! 
-//! This loader avoids keeping the enitre dump file in memory, although does have to pre-read the entire dump
+//! This loader avoids keeping the entire dump file in memory, although does have to pre-read the entire dump
 //! 
 //! Core dump format:
 //! - A fixed-size header
@@ -12,7 +12,7 @@ pub struct CoreDump {
     modules: Vec<super::ReferencedFile>,
     memory_ranges: Vec<MemoryRange>,
     
-    // NOTE: The virual memory is broken into chunks of `chunk_size`, with empty chunks not stored
+    // NOTE: The virtual memory is broken into chunks of `chunk_size`, with empty chunks not stored
     /// Size of a compressed memory chunk, nominally 1MiB
     chunk_size: u64,
     threads: Vec<crate::CpuState>,
@@ -36,7 +36,7 @@ struct MemoryRange {
     ///// Source file
     //file_path: String,
 
-    /// Indicates that this is an anonoymous binding (i.e. no backing file, i.e. it's dynamic memory)
+    /// Indicates that this is an anonymous binding (i.e. no backing file, i.e. it's dynamic memory)
     is_anon: bool,
 }
 impl CoreDump {
@@ -77,7 +77,7 @@ impl CoreDump {
                 first_chunk: n_chunks,
                 size: hdr.size,
                 v_start: hdr.v_start,
-                is_anon: name.is_empty(),
+                is_anon: name.is_empty() || name == "[heap]",
             });
             n_chunks += (next_chunk - this_chunk) as usize;
 
@@ -161,6 +161,15 @@ impl CoreDump {
         &self.threads[index]
     }
 
+    pub fn is_valid(&self, addr: u64, len: usize) -> bool {
+        for r in &self.memory_ranges {
+            if r.v_start <= addr && addr < r.v_start + r.size {
+                assert!((addr - r.v_start) + len as u64 <= r.size);
+                return true;
+            }
+        }
+        false
+    }
     pub fn read_bytes(&self, addr: u64, dst: &mut [u8]) {
         assert!(dst.len() <= 16);
         for r in &self.memory_ranges {
@@ -177,7 +186,13 @@ impl CoreDump {
                 return
             }
         }
-        panic!("Out-of-bounds read: {:#x}+{}", addr, dst.len());
+        if true {
+            panic!("Out-of-bounds read: {:#x}+{}", addr, dst.len())
+        }
+        else {
+            println!("Out-of-bounds read: {:#x}+{}", addr, dst.len());
+            dst.fill(0);
+        }
     }
 
     fn with_chunk(&self, index: usize, cb: impl FnOnce(&[u8])) {
@@ -188,9 +203,9 @@ impl CoreDump {
 struct ChunkCache {
     fp: ::std::cell::RefCell<::std::io::BufReader<::std::fs::File>>,
     uses: ::std::cell::Cell<usize>,
-    ents: Vec<::std::cell::RefCell<ChunkChacheEnt>>,
+    ents: Vec<::std::cell::RefCell<ChunkCacheEnt>>,
 }
-struct ChunkChacheEnt {
+struct ChunkCacheEnt {
     ofs: u64,
     last_use: usize,
     data: Vec<u8>,
@@ -200,7 +215,7 @@ impl ChunkCache {
         ChunkCache {
             fp: ::std::cell::RefCell::new(fp),
             uses: Default::default(),
-            ents: (0 .. 16).map(|_| ::std::cell::RefCell::new(ChunkChacheEnt { ofs: 0, last_use: 0, data: vec![0; chunk_size] })).collect(),
+            ents: (0 .. 16).map(|_| ::std::cell::RefCell::new(ChunkCacheEnt { ofs: 0, last_use: 0, data: vec![0; chunk_size] })).collect(),
         }
     }
     fn with_chunk(&self, ofs: u64, cb: impl FnOnce(&[u8])) {
@@ -292,7 +307,7 @@ mod raw {
             fp.read_exact(&mut buf)?;
             u64::from_ne_bytes(buf)
         };
-        println!("read_chunk: addr={:#x}", addr);
+        //println!("read_chunk: addr={:#x}", addr);
         let mut stream = ::flate2::bufread::ZlibDecoder::new(fp);
         match ::std::io::Read::read_exact(&mut stream, dst) {
         Ok(_) => {},
@@ -303,7 +318,7 @@ mod raw {
         }
         match ::std::io::Read::read(&mut stream, &mut [0]) {
         Ok(0) => {},
-        Ok(n) => panic!("Tailing data after compresed chunk: {}", n),
+        Ok(n) => panic!("Tailing data after compressed chunk: {}", n),
         Err(e) => {
             println!("@{}\n", stream.into_inner().seek(::std::io::SeekFrom::Current(0))?);
             return Err(e.into())

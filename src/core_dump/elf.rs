@@ -156,6 +156,15 @@ impl CoreDump {
     pub fn get_thread(&self, index: usize) -> &crate::CpuState {
         &self.threads[index]
     }
+    pub fn is_valid(&self, addr: u64, len: usize) -> bool {
+        for r in &self.memory_ranges {
+            if r.v_start <= addr && addr < r.v_start + r.size {
+                assert!( (addr - r.v_start) + len as u64 <= r.size, "Reading across segment boundaries" );
+                return true;
+            }
+        }
+        false
+    }
     pub fn read_bytes(&self, addr: u64, dst: &mut [u8]) {
         for r in &self.memory_ranges {
             if r.v_start <= addr && addr < r.v_start + r.size {
