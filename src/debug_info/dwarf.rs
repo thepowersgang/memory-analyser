@@ -122,6 +122,7 @@ impl DebugPool {
     }
     fn add_from_symtab(&mut self, base: u64, elf: &::elf::ElfBytes<::elf::endian::NativeEndian>) -> Result<(),Box<dyn ::std::error::Error>> {
         if let Some((symtab, str_tab)) = elf.symbol_table()? {
+            let len = self.symbols.len();
             for sym in symtab.iter() {
                 if ! sym.is_undefined() {
                     self.symbols.entry(base + sym.st_value).or_default().push((
@@ -130,6 +131,7 @@ impl DebugPool {
                     ));
                 }
             }
+            println!("Added {} symbols", self.symbols.len() - len);
         }
         Ok(())
     }
@@ -163,8 +165,19 @@ impl DebugPool {
         }
     }
 
+    pub fn get_symbol(&self, n: &str) -> Option<(u64, u64)> {
+        for (a, symbols) in &self.symbols {
+            for (len, name) in symbols {
+                if name == n {
+                    return Some((*a, *len));
+                }
+            }
+        }
+        None
+    }
     pub fn resolve_symbol(&self, addr: u64) -> Option<(&str, u64)> {
-        if let Some((&a, v)) = self.symbols.iter().min_by_key(|v| v.0.abs_diff(addr)) {
+        //if let Some((&a, v)) = self.symbols.iter().min_by_key(|v| v.0.abs_diff(addr)) {
+        for (&a, v) in &self.symbols {
             for &(s, ref n) in v {
                 if a <= addr && addr < a + s {
                     return Some((n, addr - a))
@@ -347,10 +360,14 @@ impl DebugPool {
     }
     #[track_caller]
     pub fn get_type(&self, ty: &TypeRef) -> &Type {
+        static EMPTY_TYPE: Type = Type::Primitive(crate::debug_info::PrimitiveType { name: String::new(), bits: 0 });
         let ty = self.type_remap.get(ty).unwrap_or(ty);
         match self.types[ty.0] {
         Some(ref v) => v,
-        None => panic!("Type not populated: {:?} = {:?}", ty, self.type_lookup.iter().find(|(_,v)| v.0 == ty.0)),
+        None => {
+            eprintln!("Type not populated: {:?} = {:?}", ty, self.type_lookup.iter().find(|(_,v)| v.0 == ty.0));
+            &EMPTY_TYPE
+        },
         }
     }
     pub fn size_of(&self, ty: &Type) -> usize {

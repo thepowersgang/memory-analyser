@@ -349,7 +349,7 @@ impl super::DebugPool
                                 self.types[ty_ref.0] = Some(Type::Pointer(target_ty, super::PointerClass::Bare, name));
                             }
                             else {
-                                println!("> {ty_ref:?} pointer_type: {:?} = {target_ty:?}", get_name(&debug_info, &unit, v));
+                                println!("> {ty_ref:?} pointer_type: {:?} = {target_ty:?} {name:?}", get_name(&debug_info, &unit, v));
                             }
                             continue
                         },
