@@ -102,7 +102,12 @@ fn main() {
                     match addr
                     {
                     debug_info::VariableLocation::IntegerRegister(_) => todo!(),
-                    debug_info::VariableLocation::Memory(addr) => visit_type(&input, &mut output, 0, debug.get_type(&ty), addr, Path::root().field(&v.var_name)),
+                    debug_info::VariableLocation::Memory(addr) =>
+                        match visit_type(&input, &mut output, 0, debug.get_type(&ty), addr, Path::root().field(&v.var_name))
+                        {
+                        Ok(()) => {},
+                        Err(()) => {},
+                        },
                     }
                     v.visited = true;
                 }
@@ -307,17 +312,13 @@ impl Output {
     }
 }
 
-fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path) {
+fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path) -> Result<(),core_dump::ReadError> {
     let ty = input.resolve_alias_chain(ty);
-    if !input.dump.is_valid(addr, 1) {
-        eprintln!("Invalid access at {:#x}", addr);
-        return ;
-    }
 
     // Handle virtual types by detecting the presence of a vtable field, then looking up its value
     let ty = if let debug_info::Type::Struct(ct) = ty {
         if ct.fields.len() > 0 && ct.fields[0].name.starts_with("_vptr.") {
-            let vptr = input.dump.read_ptr(addr + ct.fields[0].offset);
+            let vptr = input.dump.read_ptr(addr + ct.fields[0].offset)?;
             if let Some(ty) = input.debug.find_type_by_vtable(vptr) {
                 //println!("{:depth$}>>{ty}", "", ty=debug.fmt_type(ty));
                 ty
@@ -345,23 +346,23 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
     debug_info::Type::Alias(_) => panic!("Should be resolved above"),
     debug_info::Type::Struct(composite_type) => {
 
-        fn read_str<'a>(dump: &core_dump::CoreDump, addr: u64, len: u64, buf: &'a mut [u8]) -> (ByteStr<'a>,&'static str) {
+        fn read_str<'a>(dump: &core_dump::CoreDump, addr: u64, len: u64, buf: &'a mut [u8]) -> Result<(ByteStr<'a>,&'static str),core_dump::ReadError> {
             let l = (len as usize).min(buf.len());
             let buf = &mut buf[..l];
-            dump.read_bytes(addr, buf);
-            (
+            dump.read_bytes(addr, buf)?;
+            Ok((
                 ByteStr(buf),
                 if l != len as usize { "..." } else { "" }
-                )
+                ))
         }
 
-        if let Some(s) = type_handlers::CppString::opt_read(input, ty, addr) {
+        if let Some(s) = type_handlers::CppString::opt_read(input, ty, addr)? {
             assert!(s.capacity == 0 || s.len <= s.capacity, "Malformed std::string - {:#x}+{:#x}(cap={:#x})", s.ptr, s.len, s.capacity);
             assert!(s.capacity < 0x10_00000);   // 16MiB
             // TODO: Get string data, and check for duplicates?
             if s.ptr != 0 {
                 let mut buf = [0; 16];
-                let (str,t): (ByteStr<'_>, &str) = read_str(input.dump, s.ptr, s.len, &mut buf);
+                let (str,t): (ByteStr<'_>, &str) = read_str(input.dump, s.ptr, s.len, &mut buf)?;
                 println!("{:depth$}{} = {:?}{} (std::string cap={})", "", path.deref(), str, t, s.capacity);
             }
             if s.capacity == 0 {
@@ -370,111 +371,109 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             else {
                 output.claim_raw(&path.deref(), s.ptr, s.len, true);
             }
-            return ;
+            return Ok(());
         }
-        if let Some(p) = type_handlers::CppUniquePtr::opt_read(input, ty, addr) {
+        if let Some(p) = type_handlers::CppUniquePtr::opt_read(input, ty, addr)? {
             println!("{:depth$}->{:#x}", "", p.target_addr);
             if p.target_addr != 0 {
-                visit_type(input, output, depth+1, p.target_ty, p.target_addr, path.deref());
+                // NOTE: being a c++ smart pointer, this might be invalid - ignore errors
+                let _ = visit_type(input, output, depth+1, p.target_ty, p.target_addr, path.deref())?;
             }
-            return ;
+            return Ok(());
         }
-        if let Some(p) = type_handlers::CppSharedPtr::opt_read(input, ty, addr) {
+        if let Some(p) = type_handlers::CppSharedPtr::opt_read(input, ty, addr)? {
             println!("{:depth$}->{:#x}, c={:#x}", "", p.target_addr, p.count_addr);
+            // NOTE: being a c++ smart pointer, this might be invalid - ignore errors
             if p.target_addr != 0 && output.shared_pointers.insert(p.target_addr) {
-                visit_type(input, output, depth+1, p.target_ty, p.target_addr, path.field("data").deref());
+                let _ = visit_type(input, output, depth+1, p.target_ty, p.target_addr, path.field("data").deref())?;
             }
             if p.count_addr != 0 && output.shared_pointers.insert(p.count_addr) {
                 //dump_type_fields(output.debug, p.count_ty, 0);
-                visit_type(input, output, depth+1, p.count_ty, p.count_addr, path.field("refcount").deref());
+                let _ = visit_type(input, output, depth+1, p.count_ty, p.count_addr, path.field("refcount").deref())?;
             }
-            return ;
+            return Ok(());
         }
         if composite_type.name().starts_with("std::vector<bool") {
             // TODO: Claim ownership of pointed-to memory
-            return ;
+            return Ok(());
         }
-        if let Some(v) = type_handlers::CppVector::opt_read(input, ty, addr) {
+        if let Some(v) = type_handlers::CppVector::opt_read(input, ty, addr)? {
             let inner_size = input.debug.size_of(v.item_ty);
             println!("{:depth$}->{:#x}+{:#x}(+{:#x} s={inner_size:#x})", "", v.begin, v.end - v.begin, v.alloc_end - v.begin);
             if !(v.begin <= v.end && v.end <= v.alloc_end) {
                 eprintln!("Malformed std::vector: {:#x} <= {:#x} <= {:#x}", v.begin, v.end, v.alloc_end);
-                return;
-            }
-            if v.end != v.begin {
-                if !input.dump.is_valid(v.begin, 1) {
-                    return ;
-                }
+                // TODO: Error?
+                return Ok(());
             }
             for (i,a) in (v.begin .. v.end).step_by(inner_size).enumerate() {
                 output.claim(input, &path.index(i), a, v.item_ty);
-                visit_type(input, output, depth+1, v.item_ty, a, path.index(i));
+                visit_type(input, output, depth+1, v.item_ty, a, path.index(i))?;
             }
-            return ;
+            return Ok(());
         }
-        if let Some(m) = type_handlers::CppMap::opt_read(input, ty, addr) {
+        if let Some(m) = type_handlers::CppMap::opt_read(input, ty, addr)? {
             let mut n = m.cur_node;
             let mut i = 0;
             while !n.is_nil()
             {
                 output.claim(input, &path.index(i), n.data_addr(), m.item_type);
-                visit_type(input, output, depth+1, m.item_type, n.data_addr(), path.index(i));
-                n = n.next(input.dump);
+                visit_type(input, output, depth+1, m.item_type, n.data_addr(), path.index(i))?;
+                n = n.next(input.dump)?;
                 i += 1;
             }
-            return ;
+            return Ok(());
         }
-        if let Some(m) = type_handlers::CppUnorderedMap::opt_read(input, ty, addr) {
+        if let Some(m) = type_handlers::CppUnorderedMap::opt_read(input, ty, addr)? {
             let mut n = m.first_node;
             let mut i = 0;
             while !n.is_nil()
             {
                 output.claim(input, &path.index(i), n.data_addr(), m.item_type);
-                visit_type(input, output, depth+1, m.item_type, n.data_addr(), path.index(i));
-                n = n.next(input.dump);
+                visit_type(input, output, depth+1, m.item_type, n.data_addr(), path.index(i))?;
+                n = n.next(input.dump)?;
                 i += 1;
             }
-            return ;
+            return Ok(());
         }
 
         // --- rust types ---
-        if let Some(s) = type_handlers::rust::AllocString::opt_read(input, ty, addr) {
+        if let Some(s) = type_handlers::rust::AllocString::opt_read(input, ty, addr)? {
             // TODO: Get string data, and check for duplicates?
             if s.ptr != 0 {
                 let mut buf = [0; 16];
-                let (str,t): (ByteStr<'_>, &str) = read_str(input.dump, s.ptr, s.len, &mut buf);
+                let (str,t): (ByteStr<'_>, &str) = read_str(input.dump, s.ptr, s.len, &mut buf)?;
                 println!("{:depth$}{} = {:?}{} (alloc String cap={})", "", path.deref(), str, t, s.cap);
             }
             if s.ptr != 0 {
                 output.claim_raw(&path.deref(), s.ptr, s.len, true);
             }
-            return ;
+            return Ok(());
         }
-        if let Some(v) = type_handlers::rust::AllocVec::opt_read(input, ty, addr) {
+        if let Some(v) = type_handlers::rust::AllocVec::opt_read(input, ty, addr)? {
             let inner_size = input.debug.size_of(v.item_ty);
             assert!(v.begin <= v.end && v.end <= v.alloc_end);
             for (i,a) in (v.begin .. v.end).step_by(inner_size).enumerate() {
                 output.claim(input, &path.index(i), a, v.item_ty);
-                visit_type(input, output, depth+1, v.item_ty, a, path.index(i));
+                visit_type(input, output, depth+1, v.item_ty, a, path.index(i))?;
             }
-            return ;
+            return Ok(());
         }
-        if let Some(mut m) = type_handlers::rust::HashbrownMap::opt_read(input, ty, addr) {
+        if let Some(mut m) = type_handlers::rust::HashbrownMap::opt_read(input, ty, addr)? {
             // TODO: Claim the entire allocation?
             let mut i = 0;
-            while let Some(a) = m.next(input) {
+            while let Some(a) = m.next(input)? {
                 output.claim(input, &path.index(i), a, m.item_ty);
-                visit_type(input, output, depth+1, m.item_ty, a, path.index(i));
+                visit_type(input, output, depth+1, m.item_ty, a, path.index(i))?;
                 i += 1;
             }
-            return ;
+            return Ok(());
         }
-        if let Some(p) = type_handlers::rust::AllocRc::opt_read(input, ty, addr) {
-            visit_type(input, output, depth+1, p.inner_ty, p.addr, path.deref());
-            return ;
+        if let Some(p) = type_handlers::rust::AllocRc::opt_read(input, ty, addr)? {
+            visit_type(input, output, depth+1, p.inner_ty, p.addr, path.deref())?;
+            return Ok(());
         }
 
-        if let Some(tu) = type_handlers::MrustcTaggedUnion::opt_read(input, ty, addr) {
+        if let Some(tu) = type_handlers::MrustcTaggedUnion::opt_read(input, ty, addr)? {
             if false {
                 print!("TU: "); dump_type_fields(input.debug, ty, 0); println!("");
             }
@@ -483,18 +482,19 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
                     .entry(composite_type.name().to_owned()).or_default()
                     .entry(name.to_owned()).or_default()
                     += 1;
-                visit_type(input, output, depth+1, ty, addr + tu.data_ofs, path.field(name));
+                visit_type(input, output, depth+1, ty, addr + tu.data_ofs, path.field(name))?;
             }
             for f in tu.other_fields {
-                visit_type(input, output, depth+1, &input.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
+                visit_type(input, output, depth+1, &input.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name))?;
             }
-            return ;
+            return Ok(());
         }
 
-        if let Some(v) = type_handlers::MrustcRcString::opt_read(input, ty, addr) {
+        // TODO: mrustc `ThinVector`
+        if let Some(v) = type_handlers::MrustcRcString::opt_read(input, ty, addr)? {
             let mut buf = [0; 16];
             let (s,t) = if v.string_len > 0 {
-                read_str(input.dump, v.string_ptr, v.string_len, &mut buf)
+                read_str(input.dump, v.string_ptr, v.string_len, &mut buf)?
             } else {
                 (ByteStr(b""),"")
             };
@@ -502,35 +502,37 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             if v.data_addr != 0 && output.shared_pointers.insert(v.data_addr) {
                 output.claim_raw(&path, v.data_addr, input.debug.size_of(ty) as u64 + v.string_len, false);
             }
-            return ;
+            return Ok(());
         }
 
-        fn rc_ptr(input: &Input, output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path, ptr_path: Path) {
+        fn rc_ptr(input: &Input, output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path, ptr_path: Path) -> Result<(),core_dump::ReadError> {
             let (ptr_o,ptr_ty) = input.get_field(ty, ptr_path);
             let ptr_t = input.debug.get_type(&ptr_ty);
             let debug_info::Type::Pointer(inner_ty, ..) = ptr_t else { panic!("Expected pointer, got  {:?}", ptr_t); };
             let inner_ty = input.debug.get_type(inner_ty);
-            let ptr_val = input.dump.read_ptr(addr + ptr_o);
+            let ptr_val = input.dump.read_ptr(addr + ptr_o)?;
             println!("{:depth$}->{:#x}", "", ptr_val);
             if ptr_val != 0 && output.shared_pointers.insert(ptr_val) {
-                visit_type(input, output, depth+1, inner_ty, ptr_val, path.deref());
+                let _ = visit_type(input, output, depth+1, inner_ty, ptr_val, path.deref())?;
             }
+            Ok(())
         }
-        fn unique_ptr(input: &Input, output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path, ptr_path: Path) {
+        fn unique_ptr(input: &Input, output: &mut Output, depth: usize, ty: &debug_info::Type, addr: u64, path: Path, ptr_path: Path) -> Result<(),core_dump::ReadError> {
             let (ptr_o,ptr_ty) = input.get_field(ty, ptr_path);
             let ptr_t = input.debug.get_type(&ptr_ty);
             let debug_info::Type::Pointer(inner_ty, ..) = ptr_t else { panic!("Expected pointer, got  {:?}", ptr_t); };
             let inner_ty = input.debug.get_type(inner_ty);
-            let ptr_val = input.dump.read_ptr(addr + ptr_o);
+            let ptr_val = input.dump.read_ptr(addr + ptr_o)?;
             println!("{:depth$}->{:#x}", "", ptr_val);
             if ptr_val != 0 {
-                visit_type(input, output, depth+1, inner_ty, ptr_val, path.deref());
+                let _ = visit_type(input, output, depth+1, inner_ty, ptr_val, path.deref())?;
             }
+            Ok(())
         }
         // Some mrustc special types
         match composite_type.name() {
         // interned string type, ignore for now (TODO: Look for duplicates?)
-        "RcString" => return,
+        "RcString" => return Ok(()),
         // `Span`: A fixed-size reference-counted type
         "Span" => return rc_ptr(input, output, depth, ty, addr, path, Path::root().field("m_ptr")),
         // `HIR::TypeRef` - Shared pointer to type data
@@ -550,11 +552,11 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         _ => {},
         }
 
-        fn visit_ct_inner(input: &Input, output: &mut Output, depth: usize, composite_type: &debug_info::CompositeType, addr: u64, path: Path) {
+        fn visit_ct_inner(input: &Input, output: &mut Output, depth: usize, composite_type: &debug_info::CompositeType, addr: u64, path: Path) -> Result<(),core_dump::ReadError> {
             for (i,(ofs,ty)) in composite_type.parents().enumerate() {
                 let debug_info::Type::Struct(ct) = input.debug.get_type(ty) else { panic!("Parent type not a struct"); };
                 println!("{:depth$}{ty} @ {addr:#x} ({path})", "", depth=depth+1, addr=addr+ofs, ty=ct.name(), path=path.parent(i));
-                visit_ct_inner(input, output, depth+1, ct, addr + ofs, path.parent(i));
+                visit_ct_inner(input, output, depth+1, ct, addr + ofs, path.parent(i))?;
             }
             for f in composite_type.iter_fields() {
                 if f.name.starts_with("_vptr.") {
@@ -565,13 +567,14 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
                     // Skip the data pointer stored in shared_ptr's count (avoids even attempting to double-visit)
                     continue;
                 }
-                visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
+                visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name))?;
             }
+            Ok(())
         }
-        visit_ct_inner(input, output, depth, composite_type, addr, path)
+        visit_ct_inner(input, output, depth, composite_type, addr, path)?
     },
     debug_info::Type::TaggedUnion(e) => {
-        fn find_variant<'a>(input: &Input, variants: &'a [debug_info::EnumVariant], discr_addr: u64) -> Option<&'a debug_info::EnumVariant> {
+        fn find_variant<'a>(input: &Input, variants: &'a [debug_info::EnumVariant], discr_addr: u64) -> Result<Option<&'a debug_info::EnumVariant>,core_dump::ReadError> {
             for var in variants.iter() {
                 for dv in var.discr_vals.iter() {
                     match *dv {
@@ -579,9 +582,9 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
                         assert!(des.len() <= 16, "TODO: Long enum discriminant ({} bytes > 16)", des.len());
                         let mut buf = [0; 16];
                         let buf = &mut buf[..des.len()];
-                        input.dump.read_bytes(discr_addr, buf);
+                        input.dump.read_bytes(discr_addr, buf)?;
                         if buf == des {
-                            return Some(var);
+                            return Ok(Some(var));
                         }
                     },
                     debug_info::VariantDiscr::SingleU(v,s) => {
@@ -597,22 +600,22 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
                             b
                         };
                         let mut buf = [0; 16];
-                        input.dump.read_bytes(discr_addr, &mut buf[..s as usize]);
+                        input.dump.read_bytes(discr_addr, &mut buf[..s as usize])?;
                         if buf == des {
-                            return Some(var);
+                            return Ok(Some(var));
                         }
                     },
                     }
                 }
             }
-            variants.iter().find(|v| v.discr_vals.is_empty())
+            Ok(variants.iter().find(|v| v.discr_vals.is_empty()))
         }
         //print!("TaggedUnion: "); dump_type_fields(input.debug, ty, 0); println!("");
         for f in &e.outer.fields {
-            visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name));
+            visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name))?;
         }
         let variant = if let Some(o) = e.discr_ofs {
-            find_variant(input, &e.variants, addr + o)
+            find_variant(input, &e.variants, addr + o)?
         }
         else {
             e.variants.first()
@@ -628,7 +631,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             // TODO: Record the variant in the stats for this type
             // Recurse
             for f in &v.fields {
-                visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.index(vi).field(&f.name));
+                visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.index(vi).field(&f.name))?;
             }
         }
         else {
@@ -643,16 +646,17 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
     debug_info::Type::Enum(_) => {},
     debug_info::Type::Primitive(_) => {},
     debug_info::Type::Pointer(dst_ty, _, name) => {
-        let addr = input.dump.read_ptr(addr);
+        let addr = input.dump.read_ptr(addr)?;
         println!("{:depth$}->{:#x}", "", addr);
         if addr != 0 {
             // Only visit into rust's `Box` type
             if name.starts_with("alloc::boxed::Box<") {
-                visit_type(input, output, depth+1, input.debug.get_type(dst_ty), addr, path.deref());
+                let _ = visit_type(input, output, depth+1, input.debug.get_type(dst_ty), addr, path.deref())?;
             }
         }
     },
     }
+    Ok(())
 }
 
 

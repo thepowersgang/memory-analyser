@@ -7,6 +7,8 @@ enum Inner {
     /// Linux-standard ELF core dump
     Elf(elf::CoreDump),
 }
+pub type ReadError = ();
+
 pub struct CoreDump(Inner);
 impl CoreDump {
     pub fn open(path: &std::path::Path) -> Result<CoreDump,Box<dyn ::std::error::Error>> {
@@ -61,12 +63,12 @@ impl CoreDump {
             Inner::MRustc(core_dump) => core_dump.is_valid(addr, len),
             Inner::Elf(core_dump) => core_dump.is_valid(addr, len),
             };
-        if !v && true {
+        if !v && false {
             panic!("Oh noes! Out-of-bounds access {:#x}+{:#x}", addr, len);
         }
         v
     }
-    pub fn read_bytes(&self, addr: u64, dst: &mut [u8]) {
+    pub fn read_bytes(&self, addr: u64, dst: &mut [u8]) -> Result<(),ReadError> {
         match &self.0 {
         Inner::MRustc(core_dump) => core_dump.read_bytes(addr, dst),
         Inner::Elf(core_dump) => core_dump.read_bytes(addr, dst),
@@ -76,20 +78,20 @@ impl CoreDump {
 
 
 impl CoreDump {
-    pub fn read_ptr(&self, addr: u64) -> u64 {
+    pub fn read_ptr(&self, addr: u64) -> Result<u64,()> {
         let mut v = [0; 8];
-        self.read_bytes(addr, &mut v);
-        u64::from_le_bytes(v)
+        self.read_bytes(addr, &mut v)?;
+        Ok(u64::from_le_bytes(v))
     }
-    pub fn read_u32(&self, addr: u64) -> u32 {
+    pub fn read_u32(&self, addr: u64) -> Result<u32,()> {
         let mut v = [0; 4];
-        self.read_bytes(addr, &mut v);
-        u32::from_le_bytes(v)
+        self.read_bytes(addr, &mut v)?;
+        Ok(u32::from_le_bytes(v))
     }
-    pub fn read_u8(&self, addr: u64) -> u8 {
+    pub fn read_u8(&self, addr: u64) -> Result<u8,()> {
         let mut v = [0; 1];
-        self.read_bytes(addr, &mut v);
-        v[0]
+        self.read_bytes(addr, &mut v)?;
+        Ok(v[0])
     }
 }
 

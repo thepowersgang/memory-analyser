@@ -259,7 +259,7 @@ impl DebugPool {
                 {
                 ::gimli::RegisterRule::Undefined => 0,
                 ::gimli::RegisterRule::SameValue => state.gp_registers[r_name.0 as usize],
-                ::gimli::RegisterRule::Offset(cfa_ofs) => memory.read_ptr(cfa.wrapping_add_signed(*cfa_ofs)),
+                ::gimli::RegisterRule::Offset(cfa_ofs) => memory.read_ptr(cfa.wrapping_add_signed(*cfa_ofs)).unwrap(),
                 ::gimli::RegisterRule::ValOffset(cfa_ofs) => cfa.wrapping_add_signed(*cfa_ofs),
                 ::gimli::RegisterRule::Register(register) => get_register(state, register),
                 ::gimli::RegisterRule::Expression(_unwind_expression) => todo!("RegisterRule::Expression"),
@@ -311,7 +311,7 @@ impl DebugPool {
                     assert!(space.is_none(), "Handle address spaces: space={:?}", space);
                     assert!(size <= 8, "TODO: Large reads ({} bytes)", size);
                     let mut buf = [0; 8];
-                    memory.read_bytes(address, &mut buf[..size as usize]);
+                    memory.read_bytes(address, &mut buf[..size as usize]).expect("Memory read failure in unwind");
                     e.resume_with_memory(::gimli::Value::Generic(u64::from_le_bytes(buf)))
                 },
                 E::RequiresRegister { register, base_type: _ }

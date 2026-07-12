@@ -170,7 +170,7 @@ impl CoreDump {
         }
         false
     }
-    pub fn read_bytes(&self, addr: u64, dst: &mut [u8]) {
+    pub fn read_bytes(&self, addr: u64, dst: &mut [u8]) -> Result<(),()> {
         assert!(dst.len() <= 16);
         for r in &self.memory_ranges {
             if r.v_start <= addr && addr < r.v_start + r.size {
@@ -183,16 +183,11 @@ impl CoreDump {
                     let l = dst.len();
                     dst.copy_from_slice(&chunk[chunk_ofs..][..l]);
                 });
-                return
+                return Ok(())
             }
         }
-        if true {
-            panic!("Out-of-bounds read: {:#x}+{}", addr, dst.len())
-        }
-        else {
-            println!("Out-of-bounds read: {:#x}+{}", addr, dst.len());
-            dst.fill(0);
-        }
+        eprintln!("Out-of-bounds read: {:#x}+{}", addr, dst.len());
+        Err(())
     }
 
     fn with_chunk(&self, index: usize, cb: impl FnOnce(&[u8])) {

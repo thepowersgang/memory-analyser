@@ -165,7 +165,7 @@ impl CoreDump {
         }
         false
     }
-    pub fn read_bytes(&self, addr: u64, dst: &mut [u8]) {
+    pub fn read_bytes(&self, addr: u64, dst: &mut [u8]) -> Result<(),()> {
         for r in &self.memory_ranges {
             if r.v_start <= addr && addr < r.v_start + r.size {
                 assert!( (addr - r.v_start) + dst.len() as u64 <= r.size, "Reading across segment boundaries" );
@@ -187,14 +187,15 @@ impl CoreDump {
                     };
                     match r {
                     Err(e) => panic!("Failure reading {:#x}+{}: {:?}", addr, dst.len(), e),
-                    Ok(()) => return,
+                    Ok(()) => return Ok(()),
                     }
                 },
                 RangeSource::External { .. } => todo!("External file"),
                 }
             }
         }
-        todo!("Not covered? {:#x}", addr)
+        eprintln!("Not covered? {:#x}", addr);
+        return Err(());
     }
 }
 

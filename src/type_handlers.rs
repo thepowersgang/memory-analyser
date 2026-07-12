@@ -5,6 +5,7 @@ use super::debug_info::Type;
 use super::visit_helpers::Path;
 
 pub mod rust;
+type ReadErr = ();
 
 pub struct CppUniquePtr<'d> {
     pub target_addr: u64,
@@ -13,9 +14,9 @@ pub struct CppUniquePtr<'d> {
     //pub alloc_ty: &'d Type,
 }
 impl<'d> CppUniquePtr<'d> {
-    pub fn opt_read(input: &Input<'d>, ty: &Type, addr: u64) -> Option<Self> {
+    pub fn opt_read(input: &Input<'d>, ty: &Type, addr: u64) -> Result<Option<Self>,ReadErr> {
         let Type::Struct(composite_type) = ty else {
-            return None;
+            return Ok(None);
         };
         if composite_type.name().starts_with("std::unique_ptr<") {
             let (o, ptr_ty) = input.get_field(ty, Path::root().field("_M_t").parent(0).field("_M_t").parent(0).parent(1).field("_M_head_impl"));
@@ -23,13 +24,13 @@ impl<'d> CppUniquePtr<'d> {
             let Type::Pointer(inner_ty, ..) = ptr_ty else { panic!("Expected pointer") };
             let inner_ty = input.resolve_alias_chain_tr(&inner_ty);
 
-            Some(CppUniquePtr {
-                target_addr: input.dump.read_ptr(addr + o),
+            Ok(Some(CppUniquePtr {
+                target_addr: input.dump.read_ptr(addr + o)?,
                 target_ty: inner_ty
-            })
+            }))
         }
         else {
-            None
+            Ok(None)
         }
     }
 }
@@ -43,34 +44,33 @@ pub struct CppSharedPtr<'d> {
     //pub alloc_ty: &'d Type,
 }
 impl<'d> CppSharedPtr<'d> {
-    pub fn opt_read(input: &Input<'d>, ty: &Type, addr: u64) -> Option<Self> {
+    pub fn opt_read(input: &Input<'d>, ty: &Type, addr: u64) -> Result<Option<Self>,ReadErr> {
         let Type::Struct(composite_type) = ty else {
-            return None;
+            return Ok(None);
         };
-        if composite_type.name().starts_with("std::shared_ptr<") {
-            let (ptr_o, ptr_ty) = input.get_field(ty, Path::root().parent(0).field("_M_ptr"));
-            let (rc_o , rc_ty ) = input.get_field(ty, Path::root().parent(0).field("_M_refcount").field("_M_pi"));
-            let inner_ty = {
-                let i = input.resolve_alias_chain_tr(&ptr_ty);
-                let Type::Pointer(i, ..) = i else { panic!("Expected pointer") };
-                input.resolve_alias_chain_tr(i)
-            };
-            let rc_ty = {
-                let i = input.resolve_alias_chain_tr(&rc_ty);
-                let Type::Pointer(i, ..) = i else { panic!("Expected pointer") };
-                input.resolve_alias_chain_tr(i)
-            };
+        if !composite_type.name().starts_with("std::shared_ptr<") {
+            return Ok(None);
+        }
 
-            Some(CppSharedPtr {
-                target_addr: input.dump.read_ptr(addr + ptr_o),
-                target_ty: inner_ty,
-                count_addr: input.dump.read_ptr(addr + rc_o),
-                count_ty: rc_ty,
-            })
-        }
-        else {
-            None
-        }
+        let (ptr_o, ptr_ty) = input.get_field(ty, Path::root().parent(0).field("_M_ptr"));
+        let (rc_o , rc_ty ) = input.get_field(ty, Path::root().parent(0).field("_M_refcount").field("_M_pi"));
+        let inner_ty = {
+            let i = input.resolve_alias_chain_tr(&ptr_ty);
+            let Type::Pointer(i, ..) = i else { panic!("Expected pointer") };
+            input.resolve_alias_chain_tr(i)
+        };
+        let rc_ty = {
+            let i = input.resolve_alias_chain_tr(&rc_ty);
+            let Type::Pointer(i, ..) = i else { panic!("Expected pointer") };
+            input.resolve_alias_chain_tr(i)
+        };
+
+        Ok(Some(CppSharedPtr {
+            target_addr: input.dump.read_ptr(addr + ptr_o)?,
+            target_ty: inner_ty,
+            count_addr: input.dump.read_ptr(addr + rc_o)?,
+            count_ty: rc_ty,
+        }))
     }
 }
 
@@ -81,16 +81,16 @@ pub struct CppVector<'d> {
     pub item_ty: &'d Type,
 }
 impl<'d> CppVector<'d> {
-    pub fn opt_read(input: &Input<'d>, ty: &Type, addr: u64) -> Option<Self> {
+    pub fn opt_read(input: &Input<'d>, ty: &Type, addr: u64) -> Result<Option<Self>,ReadErr> {
         let Type::Struct(composite_type) = ty else {
-            return None;
+            return Ok(None);
         };
         if !composite_type.name().starts_with("std::vector<") {
-            return None;
+            return Ok(None);
         }
         if composite_type.name().starts_with("std::vector<bool") {
             // Ignore `vector<bool`
-            return None
+            return Ok(None)
         }
         let inner_ty = {
             let (_, ty) = input.get_field(ty, Path::root().parent(0).field("_M_impl").parent(1).field("_M_start"));
@@ -98,12 +98,12 @@ impl<'d> CppVector<'d> {
             let Type::Pointer(ty, ..) = ty else { panic!("Expected pointer, got {:?}", ty); };
             *ty
             };
-        Some(CppVector {
-            begin: input.dump.read_ptr(addr + 0),
-            end: input.dump.read_ptr(addr + 8),
-            alloc_end: input.dump.read_ptr(addr + 16),
+        Ok(Some(CppVector {
+            begin: input.dump.read_ptr(addr + 0)?,
+            end: input.dump.read_ptr(addr + 8)?,
+            alloc_end: input.dump.read_ptr(addr + 16)?,
             item_ty: input.debug.get_type(&inner_ty),
-        })
+        }))
     }
 }
 pub struct CppString {
@@ -113,32 +113,32 @@ pub struct CppString {
     pub capacity: u64,
 }
 impl CppString {
-    pub fn opt_read(input: &Input, ty: &Type, addr: u64) -> Option<Self> {
+    pub fn opt_read(input: &Input, ty: &Type, addr: u64) -> Result<Option<Self>,ReadErr> {
         let Type::Struct(composite_type) = ty else {
-            return None;
+            return Ok(None);
         };
         match composite_type.name() {
         "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >" => {},
-        _ => return None,
+        _ => return Ok(None),
         }
         if false {
             print!("CPP STRING: "); crate::dump_type_fields(input.debug, ty, 0); println!("");
         }
-        let ptr = input.dump.read_ptr(addr + 0);
-        let len = input.dump.read_ptr(addr + 8);
+        let ptr = input.dump.read_ptr(addr + 0)?;
+        let len = input.dump.read_ptr(addr + 8)?;
         let capacity = if ptr == addr + 0x10 {
                 // Use 0 as a sentinel for inline storage
                 0
             }
             else {
-                input.dump.read_ptr(addr + 16)
+                input.dump.read_ptr(addr + 16)?
             };
         //assert!(capacity < )
-        Some(CppString {
+        Ok(Some(CppString {
             ptr,
             len,
             capacity,
-        })
+        }))
     }
 }
 
@@ -148,12 +148,12 @@ pub struct CppMap<'d> {
     pub cur_node: CppMapNode,
 }
 impl<'d> CppMap<'d> {
-    pub fn opt_read(input: &Input<'d>, ty: &Type, addr: u64) -> Option<Self> {
+    pub fn opt_read(input: &Input<'d>, ty: &Type, addr: u64) -> Result<Option<Self>,ReadErr> {
         let Type::Struct(composite_type) = ty else {
-            return None;
+            return Ok(None);
         };
         if !composite_type.name().starts_with("std::map<") {
-            return None;
+            return Ok(None);
         }
         let item_type = input.debug.get_type(&composite_type.sub_types["value_type"]);
         // Get the inner (not type-erased) node type (TODO: Get the data offset from it)
@@ -166,21 +166,21 @@ impl<'d> CppMap<'d> {
         let node_type = input.resolve_alias_chain_tr(node_type);
         */
 
-        let node_count = input.dump.read_ptr(addr + 0x28);
+        let node_count = input.dump.read_ptr(addr + 0x28)?;
         println!("> node_count={node_count}");
 
         let first_node = if node_count > 0 {
-            let mut cur_n = CppMapNode::read(input.dump, addr + 8);
-            cur_n = CppMapNode::read(input.dump, cur_n.left_addr);
+            let mut cur_n = CppMapNode::read(input.dump, addr + 8)?;
+            cur_n = CppMapNode::read(input.dump, cur_n.left_addr)?;
             cur_n
         }else {
-            CppMapNode::read(input.dump, 0)
+            CppMapNode::read(input.dump, 0)?
         };
 
-        Some(Self {
+        Ok(Some(Self {
             item_type,
             cur_node: first_node,
-        })
+        }))
     }
 }
 #[derive(Copy,Clone)]
@@ -191,16 +191,16 @@ pub struct CppMapNode {
     right_addr: u64,
 }
 impl CppMapNode {
-    fn read(dump: &CoreDump, addr: u64) -> Self {
+    fn read(dump: &CoreDump, addr: u64) -> Result<Self,ReadErr> {
         if addr == 0 {
-            return Self { addr, left_addr: 0, parent_addr: 0, right_addr: 0 };
+            return Ok(Self { addr, left_addr: 0, parent_addr: 0, right_addr: 0 });
         }
-        Self {
+        Ok(Self {
             addr,
-            parent_addr: dump.read_ptr(addr + 0x8),
-            left_addr: dump.read_ptr(addr + 0x10),
-            right_addr: dump.read_ptr(addr + 0x18),
-        }
+            parent_addr: dump.read_ptr(addr + 0x8)?,
+            left_addr: dump.read_ptr(addr + 0x10)?,
+            right_addr: dump.read_ptr(addr + 0x18)?,
+        })
     }
     
     pub fn is_nil(&self) -> bool {
@@ -210,28 +210,28 @@ impl CppMapNode {
         self.addr + 0x20
     }
 
-    pub fn next(&self, dump: &CoreDump) -> Self {
+    pub fn next(&self, dump: &CoreDump) -> Result<Self,ReadErr> {
         let mut cur_n = *self;
         // Increment iterator (See `_Rb_tree_increment` implementation)
         if cur_n.right_addr != 0 {
             // Iterate into the RHS until no more LHS
-            cur_n = Self::read(dump, cur_n.right_addr);
+            cur_n = Self::read(dump, cur_n.right_addr)?;
             while cur_n.left_addr != 0 {
-                cur_n = Self::read(dump, cur_n.left_addr);
+                cur_n = Self::read(dump, cur_n.left_addr)?;
             }
         }
         else {
-            let mut p = Self::read(dump, cur_n.parent_addr);
+            let mut p = Self::read(dump, cur_n.parent_addr)?;
             while cur_n.addr == p.right_addr {
                 let pa = p.parent_addr;
                 cur_n = p;
-                p = Self::read(dump, pa);
+                p = Self::read(dump, pa)?;
             }
             if cur_n.right_addr != p.addr {
                 cur_n = p;
             }
         }
-        cur_n
+        Ok(cur_n)
     }
 }
 
@@ -241,12 +241,12 @@ pub struct CppUnorderedMap<'d> {
     pub first_node: CppUnorderedMapNode,
 }
 impl<'d> CppUnorderedMap<'d> {
-    pub fn opt_read(input: &Input<'d>, ty: &Type, addr: u64) -> Option<Self> {
+    pub fn opt_read(input: &Input<'d>, ty: &Type, addr: u64) -> Result<Option<Self>,ReadErr> {
         let Type::Struct(composite_type) = ty else {
-            return None;
+            return Ok(None);
         };
         if !composite_type.name().starts_with("std::unordered_map<") {
-            return None;
+            return Ok(None);
         }
         let item_type = input.resolve_alias_chain_tr(&composite_type.sub_types["value_type"]);
         //print!("UNORDERED MAP: "); crate::dump_type_fields(debug, ty, 0); println!("");
@@ -270,11 +270,11 @@ impl<'d> CppUnorderedMap<'d> {
         // _M_rehash_policy._M_next_resize: @0x28: prim64,
         // _M_single_bucket: @0x30: *=::std::__detail::struct _Hash_node_base,
 
-        let first_node_addr = input.dump.read_ptr(addr + 0x10);
-        Some(CppUnorderedMap {
+        let first_node_addr = input.dump.read_ptr(addr + 0x10)?;
+        Ok(Some(CppUnorderedMap {
             item_type,
-            first_node: CppUnorderedMapNode::read(input.dump, first_node_addr, data_ofs)
-        })
+            first_node: CppUnorderedMapNode::read(input.dump, first_node_addr, data_ofs),
+        }))
     }
 }
 pub struct CppUnorderedMapNode {
@@ -298,9 +298,9 @@ impl CppUnorderedMapNode {
     pub fn data_addr(&self) -> u64 {
         self.node_addr + self.data_ofs
     }
-    pub fn next(&self, dump: &CoreDump) -> Self {
-        let next_addr = dump.read_ptr(self.node_addr);
-        Self::read(dump, next_addr, self.data_ofs)
+    pub fn next(&self, dump: &CoreDump) -> Result<Self,ReadErr> {
+        let next_addr = dump.read_ptr(self.node_addr)?;
+        Ok(Self::read(dump, next_addr, self.data_ofs))
     }
 }
 
@@ -314,21 +314,21 @@ pub struct MrustcTaggedUnion<'d> {
     pub other_fields: &'d [super::debug_info::CompositeField],
 }
 impl<'d> MrustcTaggedUnion<'d> {
-    pub fn opt_read(input: &Input<'d>, ty: &'d Type, addr: u64) -> Option<Self> {
+    pub fn opt_read(input: &Input<'d>, ty: &'d Type, addr: u64) -> Result<Option<Self>,()> {
         let Type::Struct(composite_type) = ty else {
-            return None;
+            return Ok(None);
         };
         if !(composite_type.fields.len() >= 2
             && composite_type.fields[0].name == "m_tag"
             && composite_type.fields[1].name == "m_data"
             ) {
-            return None;
+            return Ok(None);
         }
         let d_ty = input.resolve_alias_chain_tr(&composite_type.fields[1].ty);
-        let Type::Union(d_u) = d_ty else { return None };
+        let Type::Union(d_u) = d_ty else { return Ok(None) };
         let t_o = composite_type.fields[0].offset;
         let d_o = composite_type.fields[1].offset;
-        let tag = input.dump.read_u32(addr + t_o) as usize;
+        let tag = input.dump.read_u32(addr + t_o)? as usize;
         let variant = if tag == 0 {
                 None
             }
@@ -341,11 +341,11 @@ impl<'d> MrustcTaggedUnion<'d> {
                 let ty = input.debug.get_type(&f.ty);
                 Some((&f.name[..], ty))
             };
-        Some(MrustcTaggedUnion {
+        Ok(Some(MrustcTaggedUnion {
             data_ofs: d_o,
             variant,
             other_fields: &composite_type.fields[2..]
-        })
+        }))
     }
 }
 
@@ -356,12 +356,12 @@ pub struct MrustcRcString {
     //pub refcount: u32,
 }
 impl MrustcRcString {
-    pub fn opt_read<'d>(input: &Input<'d>, ty: &'d Type, addr: u64) -> Option<Self> {
+    pub fn opt_read<'d>(input: &Input<'d>, ty: &'d Type, addr: u64) -> Result<Option<Self>,ReadErr> {
         let Type::Struct(composite_type) = ty else {
-            return None;
+            return Ok(None);
         };
         if composite_type.name() != "RcString" {
-            return None;
+            return Ok(None);
         }
         let Type::Pointer(inner_ty, ..) = input.debug.get_type(&composite_type.fields[0].ty) else { panic!() };
         let inner_ty = input.debug.get_type(inner_ty);
@@ -370,15 +370,17 @@ impl MrustcRcString {
         }
         let (data_ofs, _) = input.get_field(inner_ty, Path::root().field("data"));
         let (size_ofs, _) = input.get_field(inner_ty, Path::root().field("size"));
-        let ptr = input.dump.read_ptr(addr);
+        let ptr = input.dump.read_ptr(addr)?;
         if ptr != 0 && !input.dump.is_valid(ptr + size_ofs, 8) {
-            eprintln!("Invalid pointer in RcString: {:#x}", ptr);
-            return Some(MrustcRcString { data_addr: 0, string_ptr: 0, string_len: 0 })
+            panic!("Invalid pointer in RcString @{:#x}: {:#x}", addr, ptr);
+            //return Ok(Some(MrustcRcString { data_addr: 0, string_ptr: 0, string_len: 0 }))
+            println!("Invalid pointer in RcString: {:#x}", ptr);
+            return Err(());
         }
-        Some(MrustcRcString {
+        Ok(Some(MrustcRcString {
             data_addr: ptr,
             string_ptr: if ptr == 0 { 0 } else { ptr + data_ofs },
-            string_len: if ptr == 0 { 0 } else { input.dump.read_u32(ptr + size_ofs) as u64 },
-        })
+            string_len: if ptr == 0 { 0 } else { input.dump.read_u32(ptr + size_ofs)? as u64 },
+        }))
     }
 }
