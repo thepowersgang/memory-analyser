@@ -248,6 +248,7 @@ pub struct CppUnorderedMap<'d> {
     // the std::pair
     pub item_type: &'d Type,
     pub first_node: CppUnorderedMapNode,
+    pub element_count: u64,
 }
 impl<'d> CppUnorderedMap<'d> {
     pub fn opt_read(input: &Input<'d>, ty: &Type, addr: u64) -> Result<Option<Self>,ReadError> {
@@ -281,6 +282,7 @@ impl<'d> CppUnorderedMap<'d> {
 
         let first_node_addr = input.dump.read_ptr(addr + 0x10)?;
         Ok(Some(CppUnorderedMap {
+            element_count: input.dump.read_ptr(addr + 0x18)?,
             item_type,
             first_node: CppUnorderedMapNode::read(input.dump, first_node_addr, data_ofs),
         }))

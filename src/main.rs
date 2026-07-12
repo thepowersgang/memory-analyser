@@ -46,6 +46,7 @@ impl ::std::fmt::Display for CpuState {
 fn main() {
     struct Args {
         path: ::std::path::PathBuf,
+        out_file: Option<::std::path::PathBuf>,
         variables: Vec<Variable>,
     }
     struct Variable {
@@ -61,17 +62,36 @@ fn main() {
     let mut args = {
         let mut it = ::std::env::args();
         it.next();   // Executable name
-        let path = it.next().expect("pass a core dump");
-        let mut args = Args { path: path.into(), variables: Vec::new() };
-        for a in it {
-            let (fcn, var) = a.split_once("/").expect("Variable names must be of format `<fcn>/<var>`");
-            args.variables.push(Variable::new(fcn, var));
+        let mut path = None;
+        let mut out_file = None;
+        let mut variables = Vec::new();
+        while let Some(a) = it.next() {
+            if a.starts_with("-") {
+                match &a[..] {
+                "--output" => {
+                    out_file = Some(it.next().unwrap().into());
+                    }
+                _ => panic!("Unexpected argument"),
+                }
+            }
+            else if path.is_none() {
+                path = Some(a.into());
+                continue;
+            }
+            else {
+                let (fcn, var) = a.split_once("/").expect("Variable names must be of format `<fcn>/<var>`");
+                variables.push(Variable::new(fcn, var));
+            }
         }
         // TODO: Error if nothing passed?
-        if args.variables.is_empty() {
-            args.variables.push(Variable::new("main","crate"));
+        if variables.is_empty() {
+            variables.push(Variable::new("main","crate"));
         }
-        args
+        Args {
+            out_file,
+            path: path.expect("No dump file passed"),
+            variables,
+        }
     };
     // Open the dump
     let dump = core_dump::CoreDump::open(args.path.as_ref()).expect("Unable to open core dump");
@@ -89,6 +109,7 @@ fn main() {
 
     let input = Input { debug: &debug, dump: &dump };
     let mut output = Output::default();
+    progress::set_total(input.dump.anon_size() as u64);
 
     // Only consider thread 0
     let mut state = dump.get_thread(0).clone();
@@ -130,35 +151,49 @@ fn main() {
         }
     }
 
-    eprintln!("enum counts: {{");
-    for (t,vals) in {
-        let mut v: Vec<_> = output.enum_variant_counts.iter()
-            .map(|(k,v)| (k, v.iter().collect::<Vec<_>>()))
-            .collect();
-        v.sort_by_key(|(k,v)| (v.iter().map(|(_,b)| *b).sum::<usize>(),&k[..]));
-        v.iter_mut().for_each(|(_,v)| v.sort_by_key(|(k,v)| (*v,&k[..])));
-        v
-    }
-    {
-        eprintln!("  {t:?}: {{");
-        for (k,v) in vals {
-            eprintln!("    {k:?}: {v},");
+    fn write_output(dst: &mut dyn ::std::io::Write, dump: &core_dump::CoreDump, output: &Output) -> ::std::io::Result<()> {
+        writeln!(dst, "enum counts: {{")?;
+        for (t,vals) in {
+            let mut v: Vec<_> = output.enum_variant_counts.iter()
+                .map(|(k,v)| (k, v.iter().collect::<Vec<_>>()))
+                .collect();
+            v.sort_by_key(|(k,v)| (v.iter().map(|(_,b)| *b).sum::<usize>(),&k[..]));
+            v.iter_mut().for_each(|(_,v)| v.sort_by_key(|(k,v)| (*v,&k[..])));
+            v
         }
-        eprintln!("  }}");
+        {
+            writeln!(dst, "  {t:?}: {{")?;
+            for (k,v) in vals {
+                writeln!(dst, "    {k:?}: {v},")?;
+            }
+            writeln!(dst, "  }}")?;
+        }
+        writeln!(dst, "}}")?;
+        
+        writeln!(dst, "top-level type counts: {{")?;
+        for (k,v) in {
+            let mut v: Vec<_> = output.root_type_counts.iter().collect();
+            v.sort_by_key(|(k,v)| (*v,&k[..]));
+            v
+        }
+        {
+            writeln!(dst, "  {k:?}: {v},")?;
+        }
+        writeln!(dst, "}}")?;
+
+        writeln!(dst, "annotated usage: {:#?}", output.usage)?;
+        // TODO: Present this sorted by size on each sub-tree
+
+        writeln!(dst, "{} MiB covered (out of {} MiB)",
+            output.used_memory.calculate_usage().div_ceil(1024) as f64 / 1024.,
+            dump.anon_size().div_ceil(1024) as f64 / 1024.,
+        )?;
+        Ok(())
     }
-    eprintln!("}}");
-    eprintln!("top-level type counts: {{");
-    for (k,v) in {
-        let mut v: Vec<_> = output.root_type_counts.iter().collect();
-        v.sort_by_key(|(k,v)| (*v,&k[..]));
-        v
+    match args.out_file {
+        Some(p) => write_output(&mut ::std::fs::File::create(p).unwrap(), &dump, &output).expect("Error on output"),
+        None => write_output(&mut ::std::io::stderr().lock(), &dump, &output).expect("Error on output"),
     }
-    {
-        eprintln!("  {k:?}: {v},");
-    }
-    eprintln!("}}");
-    eprintln!("annotated usage: {:#?}", output.usage);
-    eprintln!("{} KiB covered (out of {} KiB)", output.used_memory.calculate_usage().div_ceil(1024), dump.anon_size().div_ceil(1024))
 }
 
 /// Dump the immediate fields of a structure (all direct data)
@@ -219,7 +254,7 @@ struct SparseBitmap {
     chunks: ::std::collections::BTreeMap<u64, Vec<u64>>,
 }
 impl SparseBitmap {
-    fn mark_area(&mut self, base: u64, len: u64) {
+    fn mark_area(&mut self, base: u64, len: u64) -> usize {
         /// 16 byte coverage calculation atom
         const COVERAGE_PER_BIT: usize = 16;
         /// 1024 units per `Vec<u64>` (for 64k units)
@@ -228,11 +263,17 @@ impl SparseBitmap {
         //const CHUNK_COVERAGE_BYTES: usize = CHUNK_SIZE_BITS * COVERAGE_PER_BIT;
         let b0 = base / COVERAGE_PER_BIT as u64;
         let bn = (base + len + (COVERAGE_PER_BIT - 1) as u64) / COVERAGE_PER_BIT as u64;
+        let mut n_set = 0;
         for b in b0 .. bn {
             let (ci,bit) = (b / CHUNK_SIZE_BITS as u64, b as usize % CHUNK_SIZE_BITS);
             let c = self.chunks.entry(ci).or_insert_with(|| vec![0; CHUNK_SIZE_ENTS]);
-            c[bit / 64] |= 1 << (bit % 64);
+            let m = 1 << (bit % 64);
+            if c[bit / 64] & m == 0 {
+                n_set += 1;
+                c[bit / 64] |= m;
+            }
         }
+        n_set * COVERAGE_PER_BIT
     }
 
     fn calculate_usage(&self) -> usize {
@@ -289,7 +330,7 @@ impl Output {
     fn claim_raw(&mut self, path: &Path, addr: u64, size: u64, assoc: bool) {
         println!("@{} += {}", path, size);
         // Mark it as used in the memory map
-        self.used_memory.mark_area(addr, size);
+        progress::add_mem( self.used_memory.mark_area(addr, size) );
 
         if !assoc {
             return ;
@@ -406,7 +447,9 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
                 // TODO: Error?
                 return Ok(());
             }
+            let mut p = ProgressTracker::new((v.end - v.begin) as usize / inner_size);
             for (i,a) in (v.begin .. v.end).step_by(inner_size).enumerate() {
+                p.update(i, path.index(i));
                 output.claim(input, &path.index(i), a, v.item_ty);
                 visit_type(input, output, depth+1, v.item_ty, a, path.index(i))?;
             }
@@ -414,8 +457,10 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         }
         if let Some(m) = type_handlers::CppMap::opt_read(input, ty, addr)? {
             let mut n = m.cur_node;
+            let mut p = ProgressTracker::new(m.node_count as usize);
             for i in 0 .. m.node_count
             {
+                p.update(i as usize, path.index(i as usize));
                 assert!(!n.is_nil());
                 output.claim(input, &path.index(i as usize), n.data_addr(), m.item_type);
                 visit_type(input, output, depth+1, m.item_type, n.data_addr(), path.index(i as usize))?;
@@ -426,8 +471,10 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         if let Some(m) = type_handlers::CppUnorderedMap::opt_read(input, ty, addr)? {
             let mut n = m.first_node;
             let mut i = 0;
+            let mut p = ProgressTracker::new(m.element_count as usize);
             while !n.is_nil()
             {
+                p.update(i, path.index(i));
                 output.claim(input, &path.index(i), n.data_addr(), m.item_type);
                 visit_type(input, output, depth+1, m.item_type, n.data_addr(), path.index(i))?;
                 n = n.next(input.dump)?;
@@ -556,12 +603,17 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
 
         // --- Fallback: Recurse into the type ---
         fn visit_ct_inner(input: &Input, output: &mut Output, depth: usize, composite_type: &debug_info::CompositeType, addr: u64, path: Path) -> Result<(),core_dump::ReadError> {
+            let mut p = ProgressTracker::new(composite_type.parents().count() + composite_type.iter_fields().count());
+            let mut idx = 0;
             for (i,(ofs,ty)) in composite_type.parents().enumerate() {
+                idx += 1;
                 let debug_info::Type::Struct(ct) = input.debug.get_type(ty) else { panic!("Parent type not a struct"); };
                 println!("{:depth$}{ty} @ {addr:#x} ({path})", "", depth=depth+1, addr=addr+ofs, ty=ct.name(), path=path.parent(i));
+                p.update(idx-1, path.parent(i));
                 visit_ct_inner(input, output, depth+1, ct, addr + ofs, path.parent(i))?;
             }
             for f in composite_type.iter_fields() {
+                idx += 1;
                 if f.name.starts_with("_vptr.") {   // cspell::disable-line
                     // Skip VTable pointers
                     continue ;
@@ -570,6 +622,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
                     // Skip the data pointer stored in shared_ptr's count (avoids even attempting to double-visit)
                     continue;
                 }
+                p.update(idx-1, path.field(&f.name));
                 visit_type(input, output, depth+1, input.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name))?;
             }
             Ok(())
@@ -679,5 +732,94 @@ impl ::std::fmt::Debug for ByteStr<'_> {
             }?
         }
         f.write_str("\"")
+    }
+}
+
+use progress::ProgressTracker;
+mod progress {
+    use ::std::sync::atomic::Ordering;
+    use ::std::sync::atomic::{AtomicUsize,AtomicU64};
+    
+    static CUR_LEVEL: AtomicUsize = AtomicUsize::new(0);
+    static CUR_PROGRESS: AtomicU64 = AtomicU64::new(0);
+    static CUR_SPAN: AtomicU64 = AtomicU64::new(1.0f64.to_bits());
+
+    fn atomic_f64_load(dst: &AtomicU64) -> f64 {
+        f64::from_bits(dst.load(Ordering::Relaxed))
+    }
+    fn atomic_f64_store(dst: &AtomicU64, v: f64) {
+        dst.store(v.to_bits(), Ordering::Relaxed)
+    }
+
+    /// Track nested progress
+    pub struct ProgressTracker {
+        level: usize,
+        max: usize,
+        base_frac: f64,
+        span_frac: f64,
+    }
+    impl ProgressTracker {
+        pub fn new(max: usize) -> Self {
+            Self {
+                level: CUR_LEVEL.fetch_add(1, Ordering::Relaxed),
+                max,
+                base_frac: atomic_f64_load(&CUR_PROGRESS),
+                span_frac: {
+                    let s = atomic_f64_load(&CUR_SPAN);
+                    atomic_f64_store(&CUR_SPAN, s / max as f64);
+                    s
+                },
+            }
+        }
+        pub fn update(&mut self, i: usize, path: crate::visit_helpers::Path) {
+            let _ = path;
+            assert!(i <= self.max);
+            atomic_f64_store(&CUR_PROGRESS, self.base_frac + i as f64 * self.span_frac / self.max as f64);
+            redraw(Some(&path));
+        }
+    }
+    impl ::core::ops::Drop for ProgressTracker {
+        fn drop(&mut self) {
+            assert!(self.level == CUR_LEVEL.fetch_sub(1, Ordering::SeqCst) - 1);
+            atomic_f64_store(&CUR_SPAN, self.span_frac);
+            atomic_f64_store(&CUR_PROGRESS, self.base_frac + self.span_frac);
+            redraw(None);
+        }
+    }
+    fn redraw(v: Option<&crate::visit_helpers::Path>) {
+        if true {
+            return ;
+        }
+        // TODO: Also get the percentage of covered memory, for a secondary measure
+        static LAST_UPDATE: AtomicU64 = AtomicU64::new(0);
+        let p = atomic_f64_load(&CUR_PROGRESS);
+        if p - atomic_f64_load(&LAST_UPDATE) > 0.001 {
+            eprint!("\r{:.1}%", p * 100.);
+            if let Some(v) = v {
+                eprint!(" {}", v);
+            }
+            eprint!("   \r");
+            let _ = ::std::io::Write::flush(&mut ::std::io::stdout());
+            atomic_f64_store(&LAST_UPDATE, p);
+        }
+    }
+
+    static TOTAL_BYTES: AtomicU64 = AtomicU64::new(!0);
+    static VISITED_BYTES: AtomicU64 = AtomicU64::new(0);
+    pub fn set_total(n_bytes: u64) {
+        TOTAL_BYTES.store(n_bytes, Ordering::Relaxed);
+    }
+    pub fn add_mem(n_bytes: usize) {
+        VISITED_BYTES.fetch_add(n_bytes as u64, Ordering::Relaxed);
+        static LAST_UPDATE: AtomicU64 = AtomicU64::new(0);
+        let visited = VISITED_BYTES.load(Ordering::Relaxed);
+        let total = TOTAL_BYTES.load(Ordering::Relaxed);
+        let p = visited as f64 / total as f64;
+        if p - atomic_f64_load(&LAST_UPDATE) > 0.001 {
+            eprint!("\r{:.1}% memory ({} MiB / {} MiB)", p * 100., visited >> 20, total >> 20);
+            eprint!("   \r");
+            let _ = ::std::io::Write::flush(&mut ::std::io::stdout());
+            atomic_f64_store(&LAST_UPDATE, p);
+        }
     }
 }
