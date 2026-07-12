@@ -317,14 +317,14 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
 
     // Handle virtual types by detecting the presence of a vtable field, then looking up its value
     let ty = if let debug_info::Type::Struct(ct) = ty {
-        if ct.fields.len() > 0 && ct.fields[0].name.starts_with("_vptr.") {
-            let vptr = input.dump.read_ptr(addr + ct.fields[0].offset)?;
-            if let Some(ty) = input.debug.find_type_by_vtable(vptr) {
+        if ct.fields.len() > 0 && ct.fields[0].name.starts_with("_vptr.") { // cspell:disable-line
+            let v_ptr = input.dump.read_ptr(addr + ct.fields[0].offset)?;
+            if let Some(ty) = input.debug.find_type_by_vtable(v_ptr) {
                 //println!("{:depth$}>>{ty}", "", ty=debug.fmt_type(ty));
                 ty
             }
             else {
-                println!("FAILED TO FIND VTABLE: {:#x}", vptr);
+                println!("FAILED TO FIND VTABLE: {:#x}", v_ptr);
                 ty
             }
         }
@@ -413,13 +413,12 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         }
         if let Some(m) = type_handlers::CppMap::opt_read(input, ty, addr)? {
             let mut n = m.cur_node;
-            let mut i = 0;
-            while !n.is_nil()
+            for i in 0 .. m.node_count
             {
-                output.claim(input, &path.index(i), n.data_addr(), m.item_type);
-                visit_type(input, output, depth+1, m.item_type, n.data_addr(), path.index(i))?;
+                assert!(!n.is_nil());
+                output.claim(input, &path.index(i as usize), n.data_addr(), m.item_type);
+                visit_type(input, output, depth+1, m.item_type, n.data_addr(), path.index(i as usize))?;
                 n = n.next(input.dump)?;
-                i += 1;
             }
             return Ok(());
         }

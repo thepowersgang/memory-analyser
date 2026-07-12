@@ -142,10 +142,12 @@ impl CppString {
     }
 }
 
+/// NOTE: This is the glibc `std::map`
 pub struct CppMap<'d> {
     // the std::pair
     pub item_type: &'d Type,
     pub cur_node: CppMapNode,
+    pub node_count: u64,
 }
 impl<'d> CppMap<'d> {
     pub fn opt_read(input: &Input<'d>, ty: &Type, addr: u64) -> Result<Option<Self>,ReadErr> {
@@ -155,7 +157,12 @@ impl<'d> CppMap<'d> {
         if !composite_type.name().starts_with("std::map<") {
             return Ok(None);
         }
+        if false {
+            print!("CPP MAP: "); crate::dump_type_fields(input.debug, ty, 0); println!("");
+        }
         let item_type = input.debug.get_type(&composite_type.sub_types["value_type"]);
+        let (ofs_count,_) = input.get_field(ty, Path::root().field("_M_t").field("_M_impl").parent(2).field("_M_node_count"));
+        let (ofs_hdr,_) = input.get_field(ty, Path::root().field("_M_t").field("_M_impl").parent(2).field("_M_header"));
         // Get the inner (not type-erased) node type (TODO: Get the data offset from it)
         /*
         let (_, rb_ty) = input.get_field(ty, Path::root().field("_M_t"));
@@ -166,11 +173,11 @@ impl<'d> CppMap<'d> {
         let node_type = input.resolve_alias_chain_tr(node_type);
         */
 
-        let node_count = input.dump.read_ptr(addr + 0x28)?;
+        let node_count = input.dump.read_ptr(addr + ofs_count)?;
         println!("> node_count={node_count}");
 
         let first_node = if node_count > 0 {
-            let mut cur_n = CppMapNode::read(input.dump, addr + 8)?;
+            let mut cur_n = CppMapNode::read(input.dump, addr + ofs_hdr)?;
             cur_n = CppMapNode::read(input.dump, cur_n.left_addr)?;
             cur_n
         }else {
@@ -179,6 +186,7 @@ impl<'d> CppMap<'d> {
 
         Ok(Some(Self {
             item_type,
+            node_count,
             cur_node: first_node,
         }))
     }
@@ -213,15 +221,20 @@ impl CppMapNode {
     pub fn next(&self, dump: &CoreDump) -> Result<Self,ReadErr> {
         let mut cur_n = *self;
         // Increment iterator (See `_Rb_tree_increment` implementation)
+        // - If there's a RHS node to this, ..
         if cur_n.right_addr != 0 {
-            // Iterate into the RHS until no more LHS
+            // ... go into it ...
             cur_n = Self::read(dump, cur_n.right_addr)?;
+            // ... then advance down the left-hand side of the tree
             while cur_n.left_addr != 0 {
                 cur_n = Self::read(dump, cur_n.left_addr)?;
             }
+            // Now in the leftmost child of the original node's RHS child
         }
         else {
+            // We've reached the end of this layer, so go to the parent
             let mut p = Self::read(dump, cur_n.parent_addr)?;
+            
             while cur_n.addr == p.right_addr {
                 let pa = p.parent_addr;
                 cur_n = p;
