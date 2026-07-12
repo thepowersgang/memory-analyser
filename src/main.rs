@@ -356,6 +356,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
                 ))
         }
 
+        // --- C++ Standard Template Library ---
         if let Some(s) = type_handlers::CppString::opt_read(input, ty, addr)? {
             assert!(s.capacity == 0 || s.len <= s.capacity, "Malformed std::string - {:#x}+{:#x}(cap={:#x})", s.ptr, s.len, s.capacity);
             assert!(s.capacity < 0x10_00000);   // 16MiB
@@ -435,7 +436,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             return Ok(());
         }
 
-        // --- rust types ---
+        // --- rust standard library ---
         if let Some(s) = type_handlers::rust::AllocString::opt_read(input, ty, addr)? {
             // TODO: Get string data, and check for duplicates?
             if s.ptr != 0 {
@@ -472,7 +473,8 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             return Ok(());
         }
 
-        if let Some(tu) = type_handlers::MrustcTaggedUnion::opt_read(input, ty, addr)? {
+        // --- MRustC helper types ---
+        if let Some(tu) = type_handlers::mrustc::TaggedUnion::opt_read(input, ty, addr)? {
             if false {
                 print!("TU: "); dump_type_fields(input.debug, ty, 0); println!("");
             }
@@ -490,7 +492,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         }
 
         // TODO: mrustc `ThinVector`
-        if let Some(v) = type_handlers::MrustcRcString::opt_read(input, ty, addr)? {
+        if let Some(v) = type_handlers::mrustc::RcString::opt_read(input, ty, addr)? {
             let mut buf = [0; 16];
             let (s,t) = if v.string_len > 0 {
                 read_str(input.dump, v.string_ptr, v.string_len, &mut buf)?
@@ -551,6 +553,8 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         _ => {},
         }
 
+
+        // --- Fallback: Recurse into the type ---
         fn visit_ct_inner(input: &Input, output: &mut Output, depth: usize, composite_type: &debug_info::CompositeType, addr: u64, path: Path) -> Result<(),core_dump::ReadError> {
             for (i,(ofs,ty)) in composite_type.parents().enumerate() {
                 let debug_info::Type::Struct(ct) = input.debug.get_type(ty) else { panic!("Parent type not a struct"); };
@@ -558,7 +562,7 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
                 visit_ct_inner(input, output, depth+1, ct, addr + ofs, path.parent(i))?;
             }
             for f in composite_type.iter_fields() {
-                if f.name.starts_with("_vptr.") {
+                if f.name.starts_with("_vptr.") {   // cspell::disable-line
                     // Skip VTable pointers
                     continue ;
                 }
