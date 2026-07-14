@@ -144,6 +144,7 @@ fn main() {
             break;
         }
     }
+    eprintln!("");
     for v in args.variables.iter() {
         if !v.visited {
             eprintln!("Failed to find function for {} / {}", v.fcn_name, v.var_name);
@@ -169,7 +170,7 @@ fn main() {
             writeln!(dst, "  }}")?;
         }
         writeln!(dst, "}}")?;
-        
+
         writeln!(dst, "top-level type counts: {{")?;
         for (k,v) in {
             let mut v: Vec<_> = output.root_type_counts.iter().collect();
@@ -537,8 +538,16 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             }
             return Ok(());
         }
-
-        // TODO: mrustc `ThinVector`
+        if let Some(v) = type_handlers::mrustc::ThinVector::opt_read(input, ty, addr)? {
+            let inner_size = input.debug.size_of(v.inner_ty);
+            let mut p = ProgressTracker::new(v.len as usize);
+            output.claim_raw(&path, v.data_ptr, v.cap * inner_size as u64, false);
+            for i in 0 .. v.len as usize {
+                p.update(i, path.index(i));
+                visit_type(input, output, depth, v.inner_ty, v.data_ptr + (i * inner_size) as u64, path.index(i))?;
+            }
+            return Ok(());
+        }
         if let Some(v) = type_handlers::mrustc::RcString::opt_read(input, ty, addr)? {
             let mut buf = [0; 16];
             let (s,t) = if v.string_len > 0 {

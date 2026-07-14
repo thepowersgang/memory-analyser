@@ -83,3 +83,42 @@ impl RcString {
         }))
     }
 }
+
+pub struct ThinVector<'a> {
+    pub data_ptr: u64,
+    pub len: u64,
+    pub cap: u64,
+    pub inner_ty: &'a Type,
+}
+impl<'d> ThinVector<'d> {
+    pub fn opt_read(input: &Input<'d>, ty: &'d Type, addr: u64) -> Result<Option<Self>,ReadError> {
+        let Type::Struct(composite_type) = ty else {
+            return Ok(None);
+        };
+        if !composite_type.name().starts_with("ThinVector<") {
+            return Ok(None);
+        }
+        let Type::Pointer(inner_ty, ..) = input.debug.get_type(&composite_type.fields[0].ty) else { panic!() };
+        let inner_ty = input.debug.get_type(inner_ty);
+        let p = input.dump.read_ptr(addr)?;
+        Ok(Some(if p != 0 {
+            let inner_size = input.debug.size_of(inner_ty) as u64;
+            let metadata_len = (16 + (inner_size-1)) / inner_size;
+            let meta_addr = p - metadata_len * inner_size;
+            ThinVector {
+                data_ptr: p,
+                len: input.dump.read_ptr(meta_addr + 0)?,
+                cap: input.dump.read_ptr(meta_addr + 8)?,
+                inner_ty,
+            }
+        }
+        else {
+            ThinVector {
+                data_ptr: 0,
+                len: 0,
+                cap: 0,
+                inner_ty,
+            }
+        }))
+    }
+}
