@@ -194,7 +194,7 @@ impl CoreDump {
                 }
             }
         }
-        eprintln!("Not covered? {:#x}", addr);
+        eprintln!("elf::CoreDump: Not covered? {:#x} ", addr);
         return Err(());
     }
 }
@@ -209,7 +209,7 @@ struct MemoryRange {
     // TODO: Might be from an external file
     dump_file_ofs: RangeSource,
 
-    /// Indicates that this is an anonoymous binding (i.e. no backing file, i.e. it's dynamic memory)
+    /// Indicates that this is an anonymous binding (i.e. no backing file, i.e. it's dynamic memory)
     is_anon: bool,
 }
 enum RangeSource {
