@@ -182,8 +182,32 @@ fn main() {
         }
         writeln!(dst, "}}")?;
 
-        writeln!(dst, "annotated usage: {:#?}", output.usage)?;
-        // TODO: Present this sorted by size on each sub-tree
+        // Parse the names, and sort each layer individually
+        struct Layer<'a>(std::collections::HashMap<&'a str, (&'a str, u64, Layer<'a>)>);
+        let mut d = Layer(Default::default());
+        for (k,v) in output.usage.iter() {
+            let mut it = k.split(['.','[']);
+            let mut e = it.next().unwrap();
+            let mut d = &mut d;
+            for e2 in it {
+                d = &mut d.0.get_mut(e).unwrap().2;
+                e = e2;
+            }
+            d.0.insert(e, (k, *v, Layer(Default::default())));
+        }
+        writeln!(dst, "annotated usage: {{")?;
+        fn print_layer(dst: &mut dyn ::std::io::Write, l: &Layer) -> ::std::io::Result<()> {
+            let mut v: Vec<_> = l.0.iter().collect();
+            v.sort_by_key(|&(k,(_,s,_))| (s,k));
+            v.reverse();    // Lazy: I could reverse the sort order, but just as easy to reverse afterwards
+            for (_, (path,size,child_layer)) in v {
+                writeln!(dst, "  {:?} = {},", path, FmtSize(*size))?;
+                print_layer(dst, child_layer)?;
+            }
+            Ok(())
+        }
+        print_layer(dst, &d)?;
+        writeln!(dst, "}}")?;
 
         writeln!(dst, "{} MiB covered (out of {} MiB)",
             output.used_memory.calculate_usage().div_ceil(1024) as f64 / 1024.,
@@ -825,10 +849,25 @@ mod progress {
         let total = TOTAL_BYTES.load(Ordering::Relaxed);
         let p = visited as f64 / total as f64;
         if p - atomic_f64_load(&LAST_UPDATE) > 0.001 {
-            eprint!("\r{:.1}% memory ({} MiB / {} MiB)", p * 100., visited >> 20, total >> 20);
+            eprint!("\r{:.1}% memory visited ({} / {})", p * 100., super::FmtSize(visited), super::FmtSize(total));
             eprint!("   \r");
             let _ = ::std::io::Write::flush(&mut ::std::io::stdout());
             atomic_f64_store(&LAST_UPDATE, p);
+        }
+    }
+}
+
+struct FmtSize(u64);
+impl ::std::fmt::Display for FmtSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0 > 1024*1024*64 {
+            write!(f, "{} MiB", self.0 >> 20)
+        }
+        else if self.0 > 1024*64 {
+            write!(f, "{} KiB", self.0 >> 10)
+        }
+        else {
+            write!(f, "{} B", self.0)
         }
     }
 }
