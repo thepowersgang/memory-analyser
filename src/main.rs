@@ -154,31 +154,36 @@ fn main() {
 
     fn write_output(dst: &mut dyn ::std::io::Write, dump: &core_dump::CoreDump, output: &Output) -> ::std::io::Result<()> {
         writeln!(dst, "enum counts: {{")?;
-        for (t,vals) in {
+        for (t,enm_info) in {
             let mut v: Vec<_> = output.enum_variant_counts.iter()
-                .map(|(k,v)| (k, v.iter().collect::<Vec<_>>()))
                 .collect();
-            v.sort_by_key(|(k,v)| (v.iter().map(|(_,b)| *b).sum::<usize>(),&k[..]));
-            v.iter_mut().for_each(|(_,v)| v.sort_by_key(|(k,v)| (*v,&k[..])));
+            v.sort_by_key(|(k,v)| (v.variants.iter().map(|(_,b)| b.count).sum::<usize>(),&k[..]));
             v
         }
         {
-            writeln!(dst, "  {t:?}: {{")?;
+            writeln!(dst, "  {t:?}: [{s}] {{", s=FmtSize(enm_info.size as u64))?;
+            let mut vals = enm_info.variants.iter().collect::<Vec<_>>();
+            vals.sort_by_key(|(k,v)| (v.count,&k[..]));
             for (k,v) in vals {
-                writeln!(dst, "    {k:?}: {v},")?;
+                writeln!(dst, "    {k:?}: {c} (* {s} = {ts}, {oh} overhead),",
+                    c=v.count,
+                    s=v.size,
+                    ts=FmtSize((v.size * v.count) as u64),
+                    oh=FmtSize(((enm_info.size - v.size) * v.count) as u64),
+                )?;
             }
             writeln!(dst, "  }}")?;
         }
         writeln!(dst, "}}")?;
 
         writeln!(dst, "top-level type counts: {{")?;
-        for (k,v) in {
+        for ((k,item_size),count) in {
             let mut v: Vec<_> = output.root_type_counts.iter().collect();
-            v.sort_by_key(|(k,v)| (*v,&k[..]));
+            v.sort_by_key(|((k,_),v)| (*v,&k[..]));
             v
         }
         {
-            writeln!(dst, "  {k:?}: {v},")?;
+            writeln!(dst, "  {k:?}: {count} (* {item_size} = {s}),", s=FmtSize(*item_size * *count as u64))?;
         }
         writeln!(dst, "}}")?;
 
@@ -209,7 +214,7 @@ fn main() {
         print_layer(dst, &d)?;
         writeln!(dst, "}}")?;
 
-        writeln!(dst, "{} MiB covered (out of {} MiB)",
+        writeln!(dst, "{:.3} MiB covered (out of {:.3} MiB)",
             output.used_memory.calculate_usage().div_ceil(1024) as f64 / 1024.,
             dump.anon_size().div_ceil(1024) as f64 / 1024.,
         )?;
@@ -339,10 +344,18 @@ struct Output {
 
     /// Type instance counts, only if they're at the top level (i.e. `claim` called with this type)
     // Not really useful? More interesting to see all composite type counts, to find what takes the most space
-    root_type_counts: ::std::collections::HashMap<String, usize>,
+    root_type_counts: ::std::collections::HashMap<(String,u64), usize>,
 
     /// Number of instances of each enum variants
-    enum_variant_counts: ::std::collections::HashMap<String, ::std::collections::HashMap<String, usize>>,
+    enum_variant_counts: ::std::collections::HashMap<String, EnumInfo>,
+}
+struct EnumInfo {
+    size: usize,
+    variants: ::std::collections::HashMap<String, EnumVarInfo>,
+}
+struct EnumVarInfo {
+    size: usize,
+    count: usize,
 }
 impl Output {
     /// Annotate the existence of a top-level type at a location (records memory usage)
@@ -350,7 +363,7 @@ impl Output {
         // Get the size of this type
         let size = input.debug.size_of(ty) as u64;
         self.claim_raw(path, addr, size, true);
-        *self.root_type_counts.entry(format!("{}", input.debug.fmt_type(ty))).or_default() += 1;
+        *self.root_type_counts.entry((format!("{}", input.debug.fmt_type(ty)),size)).or_default() += 1;
     }
     fn claim_raw(&mut self, path: &Path, addr: u64, size: u64, assoc: bool) {
         println!("@{} += {}", path, size);
@@ -550,12 +563,18 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
             if false {
                 print!("TU: "); dump_type_fields(input.debug, ty, 0); println!("");
             }
-            if let Some((name,ty)) = tu.variant {
-                *output.enum_variant_counts
-                    .entry(composite_type.name().to_owned()).or_default()
-                    .entry(name.to_owned()).or_default()
-                    += 1;
-                visit_type(input, output, depth+1, ty, addr + tu.data_ofs, path.field(name))?;
+            if let Some((name,var_ty)) = tu.variant {
+                // TODO: Store the variant's size to be able to calculate efficiency
+                output.enum_variant_counts
+                    .entry(composite_type.name().to_owned())
+                    .or_insert_with(|| EnumInfo { size: input.debug.size_of(ty), variants: Default::default() })
+                    .variants
+                    .entry(name.to_owned()).or_insert_with(|| EnumVarInfo {
+                        size: input.debug.size_of(var_ty),
+                        count: 0,
+                    })
+                    .count += 1;
+                visit_type(input, output, depth+1, var_ty, addr + tu.data_ofs, path.field(name))?;
             }
             for f in tu.other_fields {
                 visit_type(input, output, depth+1, &input.debug.get_type(&f.ty), addr + f.offset, path.field(&f.name))?;
@@ -712,9 +731,19 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         if let Some(v) = variant {
             let vi = unsafe { (v as *const debug_info::EnumVariant).offset_from_unsigned(e.variants.as_ptr()) };
 			let name = if v.fields.len() == 1 { v.fields[0].name.clone() } else { format!("#{vi}") };
-			*output.enum_variant_counts
-				.entry(e.outer.name().to_owned()).or_default()
-				.entry(name).or_default()
+			output.enum_variant_counts
+				.entry(e.outer.name().to_owned())
+                .or_insert_with(|| EnumInfo { size: input.debug.size_of(ty), variants: Default::default() })
+                .variants
+				.entry(name).or_insert_with(|| {
+                    let s = v.fields.iter()
+                        .map(|f| f.offset as usize + input.debug.size_of(&input.debug.get_type(&f.ty)))
+                        .max()
+                        .unwrap_or(0)
+                        ;
+                    EnumVarInfo { size: s, count: 0 }
+                    })
+                .count
 				+= 1;
             //println!("Matched {} #{vi}", e.outer.name());
             // TODO: Record the variant in the stats for this type

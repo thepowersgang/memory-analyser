@@ -378,7 +378,7 @@ impl DebugPool {
         Type::Primitive(primitive_type) => (primitive_type.bits as usize + 7) / 8,
         Type::Pointer(..) => 8,
         Type::Alias(type_ref) => self.size_of(self.get_type(type_ref)),
-        Type::Enum(_) => todo!("size_of: enum"),
+        Type::Enum(_) => 4, //todo!("size_of: enum"),
         Type::Array(inner, count) => if *count == 0 { 0 } else { self.size_of(self.get_type(inner)) * *count },
         }
     }
