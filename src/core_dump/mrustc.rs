@@ -175,11 +175,17 @@ impl CoreDump {
         for r in &self.memory_ranges {
             if r.v_start <= addr && addr < r.v_start + r.size {
                 // Correct range, now get the chunk
-                let ofs = addr - r.v_start;
+                // - `r.first_chunk` is the chunk that contains the start of the range, but this range may not be at the start of the chunk
+
+                // Get the base address of the chunk, and then offset from that chunk
+                let start_aligned = r.v_start - r.v_start % self.chunk_size;
+                let ofs = addr - start_aligned;
+                // Convert to a chunk index and offset
                 let chunk_idx = r.first_chunk + (ofs / self.chunk_size) as usize;
                 let chunk_ofs = (addr % self.chunk_size) as usize;
-                //println!("read_bytes: {:#x} -> {:#x}+{:#x} -> C{}+{:#x}", addr, r.v_start, ofs, chunk_idx, chunk_ofs);
+                println!("read_bytes: {:#x} -> {:#x}+{:#x} -> C{}+{:#x}", addr, r.v_start, ofs, chunk_idx, chunk_ofs);
                 self.with_chunk(chunk_idx, |chunk| {
+                    // NOTE: This will panic if the read extends across two different chunks
                     let l = dst.len();
                     dst.copy_from_slice(&chunk[chunk_ofs..][..l]);
                 });
@@ -197,20 +203,25 @@ impl CoreDump {
 
 struct ChunkCache {
     fp: ::std::cell::RefCell<::std::io::BufReader<::std::fs::File>>,
+    // NOTE: `usize` should be good, as it's as big as the dump can feasibly be.
     uses: ::std::cell::Cell<usize>,
     ents: Vec<::std::cell::RefCell<ChunkCacheEnt>>,
 }
+#[derive(Default)]
 struct ChunkCacheEnt {
     ofs: u64,
     last_use: usize,
     data: Vec<u8>,
+    // These two are just for debug prints
+    base_addr: u64,
+    use_count: usize,
 }
 impl ChunkCache {
     fn new(fp: ::std::io::BufReader<::std::fs::File>, chunk_size: usize) -> Self {
         ChunkCache {
             fp: ::std::cell::RefCell::new(fp),
             uses: Default::default(),
-            ents: (0 .. 16).map(|_| ::std::cell::RefCell::new(ChunkCacheEnt { ofs: 0, last_use: 0, data: vec![0; chunk_size] })).collect(),
+            ents: (0 .. 16).map(|_| ::std::cell::RefCell::new(ChunkCacheEnt { data: vec![0; chunk_size], ..Default::default() })).collect(),
         }
     }
     fn with_chunk(&self, ofs: u64, cb: impl FnOnce(&[u8])) {
@@ -224,14 +235,18 @@ impl ChunkCache {
             }
             let oldest = self.ents.iter().min_by_key(|v| v.borrow().last_use).unwrap();
             let mut e = oldest.borrow_mut();
+            //println!("with_chunk: Evict @{} w/ {} uses for @{}", e.ofs, e.use_count, ofs);
             let mut fp = self.fp.borrow_mut();
             use std::io::Seek;
             fp.seek(::std::io::SeekFrom::Start(ofs)).expect("Seek fail");
-            let _chunk_base = raw::read_chunk(&mut *fp, &mut e.data).expect("Decompression failed, it passed earlier");
+            e.base_addr = raw::read_chunk(&mut *fp, &mut e.data).expect("Decompression failed, it passed earlier");
+            e.use_count = 0;
             e.ofs = ofs;
             e
         };
         e.last_use = self.uses.get();
+        e.use_count += 1;
+        //println!("with_chunk: @{} {:#x} [{} uses]", e.ofs, e.base_addr, );
         cb(&e.data);
     }
 }
