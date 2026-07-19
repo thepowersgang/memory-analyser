@@ -161,18 +161,28 @@ fn main() {
             v
         }
         {
-            writeln!(dst, "  {t:?}: [{s}] {{", s=FmtSize(enm_info.size as u64))?;
+            let total_count: usize = enm_info.variants.iter().map(|(_,v)| v.count).sum();
+            let wastage: usize = enm_info.variants.iter()
+                .map(|(_,v)| (enm_info.max_var_size - v.size) * v.count)
+                .sum()
+                ;
+            writeln!(dst, "  {t:?}: [{s} * {total_count}, max {ms}, {w} wasted {w_p:.1}%] {{",
+                s=FmtSize(enm_info.total_size as u64),
+                ms=FmtSize(enm_info.max_var_size as u64),
+                w=FmtSize(wastage as u64),
+                w_p = wastage as f64 / (enm_info.total_size as f64 * total_count as f64) * 100.,
+                )?;
             let mut vals = enm_info.variants.iter().collect::<Vec<_>>();
             vals.sort_by_key(|(k,v)| (v.count,&k[..]));
             for (k,v) in vals {
-                writeln!(dst, "    {k:?}: {c} (* {s} = {ts}, {oh} overhead),",
+                writeln!(dst, "    {k:?}: {c} (* {s} = {ts}, {oh} waste),",
                     c=v.count,
                     s=v.size,
                     ts=FmtSize((v.size * v.count) as u64),
-                    oh=FmtSize(((enm_info.size - v.size) * v.count) as u64),
+                    oh=FmtSize(((enm_info.max_var_size - v.size) * v.count) as u64),
                 )?;
             }
-            writeln!(dst, "  }}")?;
+            writeln!(dst, "  }},")?;
         }
         writeln!(dst, "}}")?;
 
@@ -350,7 +360,8 @@ struct Output {
     enum_variant_counts: ::std::collections::HashMap<String, EnumInfo>,
 }
 struct EnumInfo {
-    size: usize,
+    total_size: usize,
+    max_var_size: usize,
     variants: ::std::collections::HashMap<String, EnumVarInfo>,
 }
 struct EnumVarInfo {
@@ -564,10 +575,16 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
                 print!("TU: "); dump_type_fields(input.debug, ty, 0); println!("");
             }
             if let Some((name,var_ty)) = tu.variant {
-                // TODO: Store the variant's size to be able to calculate efficiency
                 output.enum_variant_counts
                     .entry(composite_type.name().to_owned())
-                    .or_insert_with(|| EnumInfo { size: input.debug.size_of(ty), variants: Default::default() })
+                    .or_insert_with(|| {
+                        let total_size = input.debug.size_of(ty);
+                        let max_var_size = tu.data_union.fields.iter()
+                            .map(|v| input.debug.size_of(input.debug.get_type(&v.ty)))
+                            .max().unwrap_or(0)
+                            ;
+                        EnumInfo { total_size, max_var_size, variants: Default::default() }
+                    })
                     .variants
                     .entry(name.to_owned()).or_insert_with(|| EnumVarInfo {
                         size: input.debug.size_of(var_ty),
@@ -731,16 +748,24 @@ fn visit_type(input: &Input, output: &mut Output, depth: usize, ty: &debug_info:
         if let Some(v) = variant {
             let vi = unsafe { (v as *const debug_info::EnumVariant).offset_from_unsigned(e.variants.as_ptr()) };
 			let name = if v.fields.len() == 1 { v.fields[0].name.clone() } else { format!("#{vi}") };
-			output.enum_variant_counts
-				.entry(e.outer.name().to_owned())
-                .or_insert_with(|| EnumInfo { size: input.debug.size_of(ty), variants: Default::default() })
-                .variants
-				.entry(name).or_insert_with(|| {
-                    let s = v.fields.iter()
+            fn calc_var_size(input: &Input, v: &debug_info::EnumVariant) -> usize {
+                v.fields.iter()
                         .map(|f| f.offset as usize + input.debug.size_of(&input.debug.get_type(&f.ty)))
                         .max()
                         .unwrap_or(0)
-                        ;
+            }
+			output.enum_variant_counts
+				.entry(e.outer.name().to_owned())
+                .or_insert_with(|| {
+                    let total_size = input.debug.size_of(ty);
+                    let max_var_size = e.variants.iter()
+                        .map(|v| calc_var_size(input, v))
+                        .max().unwrap_or(0);
+                    EnumInfo { total_size, max_var_size, variants: Default::default() }
+                })
+                .variants
+				.entry(name).or_insert_with(|| {
+                    let s = calc_var_size(input, v);
                     EnumVarInfo { size: s, count: 0 }
                     })
                 .count

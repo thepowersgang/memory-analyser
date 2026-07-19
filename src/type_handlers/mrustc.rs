@@ -11,6 +11,7 @@ pub struct TaggedUnion<'d> {
     pub variant: Option<(&'d str, &'d Type)>,
     /// Other data fields on the union (`TAGGED_UNION_EX` can add methods and data)
     pub other_fields: &'d [crate::debug_info::CompositeField],
+    pub data_union: &'d crate::debug_info::CompositeType,
 }
 impl<'d> TaggedUnion<'d> {
     pub fn opt_read(input: &Input<'d>, ty: &'d Type, addr: u64) -> Result<Option<Self>,()> {
@@ -43,7 +44,8 @@ impl<'d> TaggedUnion<'d> {
         Ok(Some(Self {
             data_ofs: d_o,
             variant,
-            other_fields: &composite_type.fields[2..]
+            other_fields: &composite_type.fields[2..],
+            data_union: d_u,
         }))
     }
 }
