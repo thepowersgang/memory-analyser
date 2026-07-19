@@ -33,6 +33,9 @@ impl<'a> Path<'a> {
     pub fn get_parent(&self) -> Option<&'a Path<'a>> {
         self.parent
     }
+    pub fn node<'s>(&'s self) -> &'s PathNode<'a> {
+        &self.node
+    }
     pub fn get_prefix(&'a self, len: usize) -> &'a Path<'a> {
         let l = self.len();
         let n_pop = l.saturating_sub(len);
@@ -82,7 +85,7 @@ impl<'a> ::std::fmt::Display for Path<'a> {
         }
     }
 }
-enum PathNode<'a> {
+pub enum PathNode<'a> {
     Null,
     Field(&'a str),
     Parent(usize),

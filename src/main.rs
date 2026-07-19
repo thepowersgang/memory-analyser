@@ -198,10 +198,10 @@ fn main() {
         writeln!(dst, "}}")?;
 
         // Parse the names, and sort each layer individually
-        struct Layer<'a>(std::collections::HashMap<&'a str, (&'a str, u64, Layer<'a>)>);
+        struct Layer<'a>(std::collections::HashMap<&'a PathEnt, (&'a Vec<PathEnt>, u64, Layer<'a>)>);
         let mut d = Layer(Default::default());
         for (k,v) in output.usage.iter() {
-            let mut it = k.split(['.','[']);
+            let mut it = k.iter();
             let mut e = it.next().unwrap();
             let mut d = &mut d;
             for e2 in it {
@@ -216,7 +216,21 @@ fn main() {
             v.sort_by_key(|&(k,(_,s,_))| (s,k));
             v.reverse();    // Lazy: I could reverse the sort order, but just as easy to reverse afterwards
             for (_, (path,size,child_layer)) in v {
-                writeln!(dst, "  {:?} = {},", path, FmtSize(*size))?;
+                write!(dst, "  ")?;
+                if path.is_empty() {
+                    write!(dst, ".")?;
+                }
+                else {
+                    for e in path.iter() {
+                        match e {
+                        PathEnt::Deref => write!(dst, "*")?,
+                        PathEnt::Parent(i) => write!(dst, "#{}", i)?,
+                        PathEnt::Field(n) => write!(dst, ".{}", n)?,
+                        PathEnt::Index(i) => write!(dst, "[{}]", i)?,
+                        }
+                    }
+                }
+                write!(dst, " = {}", FmtSize(*size))?;
                 print_layer(dst, child_layer)?;
             }
             Ok(())
@@ -346,7 +360,8 @@ impl<'a> Input<'a> {
 #[derive(Default)]
 struct Output {
     /// Memory usage associated with various paths through memory (think `du`'s output)
-    usage: ::std::collections::BTreeMap<String, u64>,
+    usage: ::std::collections::BTreeMap<Vec<PathEnt>, u64>,
+
     /// A sparse bitmap representing used (visited) memory
     used_memory: SparseBitmap,
     /// Set of seen shared pointers (any sort of shared pointer, not just `std::shared_ptr`)
@@ -358,6 +373,16 @@ struct Output {
 
     /// Number of instances of each enum variants
     enum_variant_counts: ::std::collections::HashMap<String, EnumInfo>,
+}
+/// Owned version of [visit_helpers::TypeNode]
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Hash)]
+#[derive(Clone)]
+enum PathEnt {
+    Deref,
+    Parent(usize),
+    Field(String),
+    Index(usize),
 }
 struct EnumInfo {
     total_size: usize,
@@ -386,16 +411,32 @@ impl Output {
         }
 
         // Associate the used memory
-        if path.len() > 0 {
-            *self.usage.entry(String::new()).or_default() += size;
-        }
-        let mut path = path.get_prefix(4);
-        loop {
-            *self.usage.entry(format!("{}", path)).or_default() += size;
-            if let Some(p) = path.get_parent() {
-                path = p;
+        let mut path_v = {
+            // NOTE: Maximum of 4 levels
+            let mut path = path.get_prefix(4);
+            let mut v = Vec::new();
+            loop {
+                use visit_helpers::PathNode;
+                v.push(match *path.node() {
+                PathNode::Null => todo!(),
+                PathNode::Field(n) => PathEnt::Field(n.to_owned()),
+                PathNode::Parent(i) => PathEnt::Parent(i),
+                PathNode::Index(i) => PathEnt::Index(i),
+                PathNode::Deref => PathEnt::Deref,
+                });
+                if let Some(p) = path.get_parent() {
+                    path = p;
+                }
+                else {
+                    break;
+                }
             }
-            else {
+            v.reverse();
+            v
+        };
+        loop {
+            *self.usage.entry(path_v.clone()).or_default() += size;
+            if path_v.pop().is_none() {
                 break;
             }
         }
