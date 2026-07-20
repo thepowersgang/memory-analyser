@@ -172,6 +172,7 @@ impl CoreDump {
     }
     pub fn read_bytes(&self, addr: u64, dst: &mut [u8]) -> Result<(),()> {
         assert!(dst.len() <= 16);
+        let l = dst.len();
         for r in &self.memory_ranges {
             if r.v_start <= addr && addr < r.v_start + r.size {
                 // Correct range, now get the chunk
@@ -183,12 +184,17 @@ impl CoreDump {
                 // Convert to a chunk index and offset
                 let chunk_idx = r.first_chunk + (ofs / self.chunk_size) as usize;
                 let chunk_ofs = (addr % self.chunk_size) as usize;
-                println!("read_bytes: {:#x} -> {:#x}+{:#x} -> C{}+{:#x}", addr, r.v_start, ofs, chunk_idx, chunk_ofs);
-                self.with_chunk(chunk_idx, |chunk| {
-                    // NOTE: This will panic if the read extends across two different chunks
-                    let l = dst.len();
-                    dst.copy_from_slice(&chunk[chunk_ofs..][..l]);
-                });
+                if chunk_ofs + dst.len() > self.chunk_size as usize {
+                    println!("read_bytes: {:#x} -> {:#x}+{:#x} -> C{}+{:#x} (split)", addr, r.v_start, ofs, chunk_idx, chunk_ofs);
+                    let l1 = self.chunk_size as usize - chunk_ofs;
+                    let l2 = l - l1;
+                    self.with_chunk(chunk_idx+0, |chunk| dst[..l1].copy_from_slice(&chunk[chunk_ofs..][..l1]));
+                    self.with_chunk(chunk_idx+1, |chunk| dst[l1..].copy_from_slice(&chunk[0..][..l2]));
+                }
+                else {
+                    println!("read_bytes: {:#x} -> {:#x}+{:#x} -> C{}+{:#x}", addr, r.v_start, ofs, chunk_idx, chunk_ofs);
+                    self.with_chunk(chunk_idx, |chunk| dst.copy_from_slice(&chunk[chunk_ofs..][..l]));
+                }
                 return Ok(())
             }
         }
@@ -218,10 +224,12 @@ struct ChunkCacheEnt {
 }
 impl ChunkCache {
     fn new(fp: ::std::io::BufReader<::std::fs::File>, chunk_size: usize) -> Self {
+        // Store at least 8 entries, or as many as is required for 128MiB
+        let n_ents = usize::max( (128 << 20) / chunk_size, 8 );
         ChunkCache {
             fp: ::std::cell::RefCell::new(fp),
             uses: Default::default(),
-            ents: (0 .. 16).map(|_| ::std::cell::RefCell::new(ChunkCacheEnt { data: vec![0; chunk_size], ..Default::default() })).collect(),
+            ents: (0 .. n_ents).map(|_| ::std::cell::RefCell::new(ChunkCacheEnt { data: vec![0; chunk_size], ..Default::default() })).collect(),
         }
     }
     fn with_chunk(&self, ofs: u64, cb: impl FnOnce(&[u8])) {

@@ -201,8 +201,11 @@ fn main() {
         struct Layer<'a>(std::collections::HashMap<&'a PathEnt, (&'a Vec<PathEnt>, u64, Layer<'a>)>);
         let mut d = Layer(Default::default());
         for (k,v) in output.usage.iter() {
+            if k.is_empty() {
+                continue ;
+            }
             let mut it = k.iter();
-            let mut e = it.next().unwrap();
+            let mut e = it.next(). unwrap();
             let mut d = &mut d;
             for e2 in it {
                 d = &mut d.0.get_mut(e).unwrap().2;
@@ -211,6 +214,7 @@ fn main() {
             d.0.insert(e, (k, *v, Layer(Default::default())));
         }
         writeln!(dst, "annotated usage: {{")?;
+        writeln!(dst, "  . = {}", FmtSize(output.usage[&vec![]]))?;
         fn print_layer(dst: &mut dyn ::std::io::Write, l: &Layer) -> ::std::io::Result<()> {
             let mut v: Vec<_> = l.0.iter().collect();
             v.sort_by_key(|&(k,(_,s,_))| (s,k));
@@ -230,7 +234,7 @@ fn main() {
                         }
                     }
                 }
-                write!(dst, " = {}", FmtSize(*size))?;
+                write!(dst, " = {}\n", FmtSize(*size))?;
                 print_layer(dst, child_layer)?;
             }
             Ok(())
